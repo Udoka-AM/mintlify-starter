@@ -1,0 +1,65 @@
+---
+title: "What Corridor Is: Settlement Rails for African Corridors"
+sidebarTitle: "What It Is"
+description: "Corridor gives licensed PSPs, remittance operators, and importers one stablecoin treasury on Tempo that settles every African payment corridor they serve."
+---
+
+Corridor is stablecoin settlement and treasury infrastructure built for licensed payment companies moving money into and out of Africa. You bring the license, the KYC, and the end-customer relationships. Corridor handles the rails: a single **pathUSD balance on Tempo** funds every corridor you serve, a 32-byte **Corridor Reference** travels in the memo field of every chain it touches, and the ledger reconciles automatically on both sides of each payment.
+
+## Who Corridor Serves
+
+<CardGroup cols={2}>
+  <Card title="Remittance and payout operators" icon="send">
+    Run diaspora and B2B payouts into Africa — EUR, GBP, or USD in, NGN, KES, or GHS out — without pre-funding nostro accounts in each country.
+  </Card>
+  <Card title="Importers and their PSPs" icon="ship">
+    Pay suppliers in China, Hong Kong, India, the UAE, and the Americas, with the option to keep supplier prices off public chains using Zcash shielded batches.
+  </Card>
+  <Card title="Ramps and payout partners" icon="plug">
+    Become a spoke: one integration with Corridor reaches every customer on the network and every other region it serves.
+  </Card>
+  <Card title="Treasury and finance teams" icon="landmark">
+    Work from a single console: one balance per corridor, a 7-day pre-funding forecast, three-way reconciliation, and auditor disclosures ready on demand.
+  </Card>
+</CardGroup>
+
+## What Corridor Replaces
+
+Corridor eliminates the capital traps and manual work that make African corridors the most expensive payment routes on earth. The table below shows what changes when you run on Corridor rails.
+
+| Before Corridor | With Corridor |
+|---|---|
+| Fiat pre-funded in a bank account in every country | One pathUSD balance on Tempo, topped up when the forecast says so |
+| T+1 to T+3 settlement through correspondent banks | 0.6 s finality on the hub; minutes end-to-end through partners |
+| A new banking setup per corridor (N×N integrations) | One partner per region; every spoke reaches every other spoke (N integrations total) |
+| Spreadsheets and statement matching by hand | Automatic matching on a reference carried in every chain's memo field |
+| Supplier prices visible on public chains | Shielded batches on Zcash Ironwood, with a viewing key scoped to one customer and period |
+
+## What Corridor Is Not
+
+Understanding the boundaries matters for compliance and integration design.
+
+- **Not a money transmitter.** You hold the FX permissions, the KYC, and the end-customer relationship. For regulated outbound flows — such as Form M for Nigerian imports — Corridor carries the compliance references in saga data and produces the reconciliation trail as audit evidence, but it does not obtain or require its own transmission licence.
+- **Not a wallet or an exchange.** Your customers do not trade on Corridor. They settle and reconcile payments through it.
+- **Not a new chain.** Corridor composes existing chains for what each does best: Tempo for settlement, Solana and Base for partner liquidity, and Zcash for privacy. You integrate with those chains through Corridor, not instead of them.
+
+## Live Status
+
+The table below is an honest account of what runs today on testnets. Every row marked **Live** is verifiable on-chain from the [Evidence](/status/evidence) page.
+
+| Capability | State | Detail |
+|---|---|---|
+| Tempo settlement with memo references | **Live (testnet)** | `transferWithMemo` on Moderato, found by indexed memo topic, booked exactly once |
+| Settlement saga with on-chain compensation | **Live (testnet)** | Forced partner failures refunded on Tempo in reverse order |
+| Hub-and-spoke routing to 32 currencies | **Live** | Planner enforces the hub; tested end-to-end |
+| Solana partner funding with SPL memo | **Live (devnet)** | Real USDC transfer with `corridor:<ref>` memo |
+| Paj partner adapter (API v2) and signed webhooks | **Built** | Exercised against a Paj-shaped mock using the same HMAC scheme |
+| Shielded batches on Zcash Ironwood | **Live (testnet)** | One transaction, three recipients, encrypted invoice memos |
+| FROST 2-of-3 vault control | **Live (testnet)** | Signer 2 alone refused; signers 1 + 3 co-signed successfully |
+| NEAR Intents pricing for USD → ZEC | **Live quotes** | Mainnet 1Click quotes; testnet delivery uses real testnet ZEC |
+| Across bridge Tempo → Base → Solana | **Built, mainnet pending** | Live quotes verified; testnet route uses a simulated fill with the same interface |
+| Partner fiat leg | **Simulated** | Mock partner with Paj's lifecycle; production requires a Paj business API key |
+
+<Warning>
+  All demos run on testnets. Moving to mainnet requires a small funded float (tens of dollars) and a Paj business API key. No code changes are needed. See the [Roadmap](/status/roadmap) for the production timeline.
+</Warning>

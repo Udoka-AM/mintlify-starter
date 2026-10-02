@@ -1,0 +1,143 @@
+---
+title: "The Corridor Reference: One ID Across Three Chains"
+sidebarTitle: "Corridor Reference"
+description: "A 32-byte identifier carried in every chain's native memo field links Tempo logs, Solana memos, and Zcash outputs to one reconciliation join key."
+---
+
+Every Corridor movement carries the same 32-byte **Corridor Reference**: in Tempo's TIP-20 memo field, in a Solana SPL Memo instruction, and in the encrypted memo of each Zcash Ironwood output. Reconciliation across all three chains is a join on this single value — no external indexer, no manual matching.
+
+## Byte layout (version 2)
+
+| Bytes | Field | Notes |
+|---|---|---|
+| `0` | Version | `0x02` |
+| `1` | Kind | `payout 0x01` · `batch 0x02` · `batch item 0x03` · `sweep 0x04` · `deposit 0x05` · `collection 0x06` |
+| `2` | Funding currency | One-byte index from the currency table (32 fiat currencies, room for 255) |
+| `3` | Beneficiary currency | Same table — `GHS-HKD` needs no registry change |
+| `4` | Flags | bit 0 = shielded |
+| `5–20` | Payment id | UUIDv7 (16 bytes): time-ordered, globally unique |
+| `21–27` | Customer tag | 7-byte keyed HMAC of the customer id — links payments to a customer without naming them on a public chain |
+| `28–31` | Checksum | First 4 bytes of SHA-256 over bytes 0–27 |
+
+The TypeScript types that back this layout come directly from `@corridor/core`:
+
+```ts
+// packages/core/src/reference.ts
+export const RefKind = {
+  Payout:     0x01,
+  Batch:      0x02,
+  BatchItem:  0x03,
+  Sweep:      0x04,
+  Deposit:    0x05,
+  Collection: 0x06,
+} as const;
+export type RefKind = (typeof RefKind)[keyof typeof RefKind];
+
+export interface CorridorRef {
+  kind:        RefKind;
+  corridor:    CorridorCode;   // e.g. "NGN-CNY"
+  shielded:    boolean;
+  /** UUIDv7 of the payout, batch, or batch item. */
+  id:          string;
+  /** 7-byte keyed hash of the customer id (see `customerTag`). */
+  customerTag: Uint8Array;
+}
+```
+
+## A real reference, decoded
+
+The payout that paid a Shenzhen supplier ¥7,140 on testnet carries this reference in its Tempo `TransferWithMemo` log:
+
+```text
+0x 02 01 28 46 00 01a0eb3fe7e57ca994eb596e7f87c87f 33d74bd58688d8 53957c1f
+   │  │  │  │  │  │                                │              └ checksum ✓
+   │  │  │  │  │  │                                └ customer tag (7-byte keyed HMAC)
+   │  │  │  │  │  └ payment id  01a0eb3f-e7e5-7ca9-94eb-596e7f87c87f  (UUIDv7)
+   │  │  │  │  └ flags: public lane
+   │  │  │  └ to:   0x46 = 70 = CNY
+   │  │  └ from: 0x28 = 40 = NGN
+   │  └ kind: payout
+   └ version 2
+```
+
+## Where the reference lives on each chain
+
+| Venue | Field | Why it fits |
+|---|---|---|
+| **Tempo** | TIP-20 `transferWithMemo(to, amount, bytes32 memo)` — the memo is an **indexed topic** of the `TransferWithMemo` event | Reconciliation filters logs by reference directly via `eth_getLogs`, with no indexer |
+| **Solana** | SPL Memo instruction `corridor:<hex>` in the same transaction as the USDC transfer | The native pattern ramp partners already read |
+| **Zcash** | ZIP-302 text memo on each Ironwood output: `INV-… \n corridor:<hex>` | Encrypted to the recipient; readable only by the recipient and viewing-key holders |
+| **Partners** | Free-text fields (`description` / `userExternalId`), echoed back on webhooks | Lets partner events join the same reconciliation |
+
+## Codec
+
+The `@corridor/core` package exposes `encodeRef`, `decodeRef`, `customerTag`, and `uuidv7`. Per-chain helpers (`toSolanaMemo`, `toZcashMemo`, etc.) encode the same hex reference into each venue's native format:
+
+```ts
+import {
+  encodeRef,
+  decodeRef,
+  customerTag,
+  toSolanaMemo,
+  toZcashMemo,
+  RefKind,
+  uuidv7,
+} from "@corridor/core";
+
+// Build a reference for a new NGN → CNY payout
+const ref = encodeRef({
+  kind:        RefKind.Payout,
+  corridor:    "NGN-CNY",
+  shielded:    false,
+  id:          uuidv7(),
+  customerTag: customerTag("adeola-imports", process.env.CORRIDOR_REF_SECRET!),
+});
+// → "0x020128460001a0eb3f..."  (64 hex chars, 32 bytes)
+
+// Validate and parse it back — throws on version mismatch, unknown kind, or bad checksum
+decodeRef(ref);
+
+// Encode for Solana: attach as an SPL Memo instruction
+toSolanaMemo(ref);
+// → "corridor:020128460001a0eb3f..."
+
+// Encode for Zcash: 512-byte ZIP-302 text memo, zero-padded
+toZcashMemo(ref, "INV-2026-0042");
+// → Uint8Array(512) [ "INV-2026-0042\ncorridor:020128..." ]
+```
+
+<Tip>
+The 4-byte checksum makes a mistyped or truncated reference fail loudly at decode time rather than silently matching nothing in reconciliation. Any corrupted reference throws `"reference checksum mismatch"` before it can cause a phantom match.
+</Tip>
+
+## Why this design
+
+<CardGroup cols={2}>
+  <Card title="Fixed 32 bytes" icon="ruler">
+    Fits Tempo's `bytes32` memo exactly. The hub carries it with zero encoding overhead — no length prefix, no base58, just the raw value.
+  </Card>
+  <Card title="Currency pair encoded directly" icon="arrow-left-right">
+    Version 2 encodes the funding and beneficiary currencies as byte indices rather than a corridor id, so any spoke is addressable without a registry change. Decoders reject unknown versions.
+  </Card>
+  <Card title="No PII on-chain" icon="shield">
+    The customer tag is a keyed HMAC: an observer can see that two payments share a tag, but only Corridor can say whose payments they are.
+  </Card>
+  <Card title="Three-way reconciliation" icon="scan-search">
+    One join key across Tempo logs, partner webhooks, and Zcash viewing-key scans. The same reconciliation engine handles every lane with no special casing per chain.
+  </Card>
+</CardGroup>
+
+## Customer tag generation
+
+The customer tag is a 7-byte HMAC-SHA256 truncation, keyed by a secret Corridor controls:
+
+```ts
+// packages/core/src/reference.ts
+export function customerTag(customerId: string, secret: string | Uint8Array): Uint8Array {
+  return new Uint8Array(
+    createHmac("sha256", secret).update(customerId).digest().subarray(0, CUSTOMER_TAG_BYTES)
+  );
+}
+```
+
+Because the key is never published, the tag is a one-way binding: Corridor's internal systems can correlate a customer's payments, but no on-chain observer can reverse it.

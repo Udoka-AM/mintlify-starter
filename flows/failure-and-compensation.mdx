@@ -1,0 +1,104 @@
+---
+title: "Failure and Compensation: Automatic Saga Recovery"
+sidebarTitle: "Failure Recovery"
+description: "A forced partner failure triggers automatic reverse-order saga compensation — including a real on-chain Tempo refund — leaving the customer's balance exactly where it started."
+---
+
+Payments fail. What matters is where the money ends up and whether the ledger reflects reality at every point in between. Corridor's saga engine handles failures by compensating each completed leg in reverse order — not with a database rollback, but with real on-chain transactions that create a new, auditable trail. This page walks through a forced partner failure on EUR→NGN (4 pathUSD, testnet, 29 September 2026) and explains exactly when Corridor compensates automatically and when it does not.
+
+## Run the demo
+
+Use the treasury console's one-click action:
+
+```bash
+pnpm console
+# then open http://localhost:4400 and click "Payout with partner failure"
+```
+
+The console action injects a failure at `partner.payout` (`faults.failAt`). The demo ran three times on testnet; each run compensated cleanly with a real Tempo refund.
+
+## What happens step by step
+
+The saga runs its forward legs normally until the injected failure. At that point, it compensates every completed leg in reverse order.
+
+```
+Saga: reserve 4 pathUSD (available → hold)
+Saga: bridge out — treasury → escrow on Tempo, Corridor Reference in memo
+Saga: [partner.payout FAILS — injected]
+
+  ↓ compensate in reverse order
+
+Saga: refund — escrow → treasury on Tempo, same reference in memo
+Saga: release hold (hold → available)
+Saga status: compensated
+```
+
+| Leg | Forward action | Compensation |
+|---|---|---|
+| `ledger.reserve` | Available balance → hold | Hold → available (`payout.release`) |
+| `tempo.transfer` | Treasury → escrow ([0xb13fd060…](https://explore.testnet.tempo.xyz/tx/0xb13fd06043c4647bbcdeb9e53313f02f845443e8ddcd17a57a468758a8ae229d)) | Escrow → treasury refund ([0x67790303…](https://explore.testnet.tempo.xyz/tx/0x6779030377fb90884212fa7f5d3acc681958856b7ce22406862f7d2e0940c944)) |
+| `partner.payout` | **Failed** — nothing was sent | Nothing to undo |
+
+Both the forward Tempo transfer and the compensation refund carry the same 32-byte Corridor Reference in their `transferWithMemo` memo. The reconciliation engine matches both movements to the forward and compensating ledger entries, keyed by their respective log references.
+
+## Why reverse order
+
+Compensation runs from the last completed step back to the first. The sequence matters:
+
+If the hold were released before the bridge refund arrived, the customer's available balance would show funds that are still sitting in the escrow address on-chain. The ledger would balance — but it would describe a state that never existed.
+
+In reverse order, every intermediate state the ledger passes through is a state that actually existed on-chain. The invariants hold at every step, not just at the end.
+
+## The compensation leg is a real transaction
+
+The Tempo refund is not a database rollback. It is a new `transferWithMemo` that moves value from the escrow address back to the treasury vault. It creates its own on-chain log entry, its own ledger postings, and its own reconciliation observation — all keyed by the same Corridor Reference as the original transfer.
+
+This means the settlement timeline in the treasury console shows the full story: the forward transfer, the failure, the compensation transfer, and the final `compensated` status, each with a link to the Tempo block explorer.
+
+## When Corridor does NOT compensate automatically
+
+<Warning>
+  If the partner fails **after** it has been funded, Corridor stops the saga at `manual_review` rather than compensating. Compensating at that point could double-pay the recipient once the partner processes its own refund.
+</Warning>
+
+The distinction is where the money is:
+
+| Failure point | Money location | Corridor action |
+|---|---|---|
+| Partner fails **before** funding | Still in Corridor's escrow on-chain | Compensate automatically: refund bridge, release hold |
+| Partner fails **after** funding | At the partner, awaiting their refund | Stop at `manual_review`; wait for ops to confirm the partner's refund before closing |
+
+The saga engine enforces this through `ManualReviewError`: no retries, no automatic compensation, and the saga parks in the exception queue until a person resolves it.
+
+## Exactly-once funding
+
+Before sending any funds to the partner, the saga records the partner order ID and the funding transaction durably in `partner_order_links`. If the process crashes mid-leg and the step is retried, the engine finds the existing order and funding transaction rather than creating new ones. You cannot accidentally fund a partner twice.
+
+## The exception queue
+
+Open the treasury console's **Exceptions** panel to see any saga in `manual_review`. Each entry shows:
+
+- The saga ID and corridor
+- The step that stopped (e.g. `partner.payout`)
+- The error context (e.g. post-funding failure, partner order ID, last known status)
+- The actions available to ops: mark resolved (once the partner's refund is confirmed), or escalate
+
+<Note>
+  A `manual_review` entry does not mean money is lost. It means Corridor is holding the saga open until a human confirms the external state before taking any further action on-chain.
+</Note>
+
+## Net result after compensation
+
+| | Before payout | After compensation |
+|---|---|---|
+| Customer available balance | X pathUSD | X pathUSD (fully restored) |
+| Customer hold | 0 | 0 |
+| Treasury vault on Tempo | Y pathUSD | Y pathUSD (refund received) |
+| Escrow address | 0 | 0 |
+| Saga status | — | `compensated` |
+
+The customer ends exactly where they started. The ledger shows every step — the forward legs, the failure, and the compensation legs — as an immutable, auditable journal.
+
+<Tip>
+  To see the full happy-path flow before the failure, run `pnpm payout:demo` and read the [EUR → NGN Payout](/flows/payout-eur-ngn) walkthrough.
+</Tip>

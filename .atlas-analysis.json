@@ -1,0 +1,142 @@
+{
+  "projectType": "saas",
+  "projectName": "Corridor",
+  "projectDescription": "Stablecoin settlement and treasury infrastructure for licensed payment companies moving money into and out of Africa — one pathUSD balance on Tempo, instant settlement, automatic reconciliation, and optional shielded supplier payments on Zcash.",
+  "theme": "luma",
+  "primaryColor": "#040404",
+  "lightColor": "#7c7c7c",
+  "darkColor": "#d6d6d6",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "what-corridor-is",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "The Opportunity",
+            "pages": [
+              "market/the-problem",
+              "market/stablecoin-flows",
+              "market/business-model"
+            ]
+          },
+          {
+            "group": "Product Status",
+            "pages": [
+              "status/evidence",
+              "status/roadmap"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "How It Works",
+        "groups": [
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/hub-and-spoke",
+              "concepts/corridor-reference",
+              "concepts/settlement-assets"
+            ]
+          },
+          {
+            "group": "Engines",
+            "pages": [
+              "concepts/ledger",
+              "concepts/routing",
+              "concepts/saga",
+              "concepts/reconciliation"
+            ]
+          },
+          {
+            "group": "Treasury Console",
+            "pages": [
+              "concepts/treasury-console",
+              "concepts/security"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Integrations",
+        "groups": [
+          {
+            "group": "Settlement & Bridging",
+            "pages": [
+              "integrations/tempo",
+              "integrations/across",
+              "integrations/base"
+            ]
+          },
+          {
+            "group": "Liquidity & Payouts",
+            "pages": [
+              "integrations/solana",
+              "integrations/paj",
+              "integrations/partner-interface"
+            ]
+          },
+          {
+            "group": "Shielded Lane",
+            "pages": [
+              "integrations/zcash",
+              "integrations/frost",
+              "integrations/near-intents"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Payment Flows",
+        "groups": [
+          {
+            "group": "End-to-End Guides",
+            "pages": [
+              "flows/payout-eur-ngn",
+              "flows/importer-ngn-cny",
+              "flows/shielded-supplier-batch",
+              "flows/failure-and-compensation"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Single pathUSD stablecoin treasury on Tempo replaces pre-funded nostro accounts in every country",
+    "Hub-and-spoke routing: N partner integrations instead of N×N bilateral corridors",
+    "0.6-second settlement finality on Tempo with 32-byte Corridor Reference in every chain's memo field",
+    "Two-hop cross-chain bridge via Across (Tempo → Base → Solana) to access ramp partner liquidity",
+    "Durable settlement saga engine with automatic reverse-order compensation on failure",
+    "Double-entry ledger with automatic three-way reconciliation across Tempo, Solana, and partner webhooks",
+    "Shielded B2B supplier payments via Zcash Ironwood with FROST 2-of-3 threshold vault control",
+    "Auditor disclosure via scoped viewing keys (per customer, per period)",
+    "7-day pre-funding forecast and low-balance alerts in the treasury console",
+    "Support for 32+ currencies across Africa, Asia, the Americas, and Europe"
+  ],
+  "publicApiSurface": [
+    "POST /webhooks/:partner — verified, idempotent partner webhook ingest (HMAC-SHA256)",
+    "RampPartner interface: rates(), openPayout(), openCollection(), getOrder(), verifyWebhook(), parseWebhook()",
+    "PayoutIntent: { corridor, amount, privacy, recipient, reference }",
+    "CorridorRef: 32-byte reference (version, kind, funding currency, beneficiary currency, flags, payout/batch id, customer tag, checksum)",
+    "Venue enum: tempo | base | solana | partner_fiat | zcash_ironwood",
+    "LegSpec: kind, from { venue, asset }, to { venue, asset }",
+    "pnpm tempo:smoke — testnet memo transfer and ledger booking",
+    "pnpm payout:demo — EUR→NGN public payout saga with forced-failure compensation",
+    "pnpm importer:demo — NGN collection then CNY supplier payout across the hub",
+    "pnpm zcash:frost — FROST 2-of-3 shielded Zcash batch payout",
+    "pnpm across:testnet — Live Across bridge deposit (Base Sepolia → Solana devnet)",
+    "pnpm console — Treasury console at http://localhost:4400",
+    "Across Swap API: GET /swap/approval → calldata, deposit, fill tracking",
+    "NEAR Intents 1Click quote endpoint (USDC → ZEC pricing)",
+    "Paj Public API v2: offramp orders (one-off funding address), onramp orders (virtual bank account), rates"
+  ]
+}

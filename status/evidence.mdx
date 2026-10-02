@@ -1,0 +1,132 @@
+---
+title: "Live Testnet Evidence: Every Transaction Linked"
+sidebarTitle: "Evidence"
+description: "Every flow Corridor has run on testnet, with real explorer links, reconciliation counts, and vault accounting down to the last microunit."
+---
+
+Corridor's testnet runs are not simulations. Every Tempo transfer, Zcash shielded batch, Solana funding transaction, and FROST-signed spend is on-chain and verifiable. This page lists each one in order, with the explorer link, the outcome it produced in the ledger, and the reconciliation count it contributed to. The [console replay](https://udoka-am.github.io/corridor/console/) shows the same runs as an interactive walkthrough.
+
+## Headline counts
+
+<CardGroup cols={3}>
+  <Card title="45 / 45 reconciled" icon="check-check">
+    Tempo 30 · partner webhooks 5 · Zcash viewing-key scan 10. Zero unbooked, zero unreferenced.
+  </Card>
+  <Card title="Vault balanced to the microunit" icon="scale">
+    Treasury on-chain **1,000,051.994555 pathUSD** = ledger **1,000,051.994555 pathUSD**.
+  </Card>
+  <Card title="10 gas fees booked" icon="fuel">
+    **0.005445 pathUSD** booked to `expense:gas` directly from Tempo chain logs.
+  </Card>
+</CardGroup>
+
+## D1 — Tempo `transferWithMemo` (29 Sep)
+
+The first milestone confirmed that a Tempo memo transfer can be found by its indexed topic and booked exactly once.
+
+`pnpm tempo:smoke` called `transferWithMemo` on Moderato testnet. The observer filtered logs by the indexed memo topic, found the transfer, and posted one journal entry — the ledger's uniqueness constraint on `(venue, external_ref)` blocks any duplicate.
+
+| What was tested | Result |
+|---|---|
+| `transferWithMemo` on Moderato (chain 42431) | Transfer confirmed |
+| Found by indexed `TransferWithMemo` memo topic | ✅ |
+| Booked exactly once in the ledger | ✅ |
+
+## D2 — Settlement saga with forced-failure compensation (30 Sep)
+
+`pnpm payout:demo` ran the full reserve → bridge → partner saga. A forced partner failure triggered compensation in reverse order: the partner leg was rolled back, then a real Tempo refund returned funds to the treasury.
+
+| Step | Result | Transaction |
+|---|---|---|
+| Payout EUR → NGN, reserve + Tempo leg | Completed | [0x43e7f0ba…](https://explore.testnet.tempo.xyz/tx/0x43e7f0bac5488ac23adc9120c988f310f27b4f5ca17dca5bdc0497f8c2109e52) |
+| Forced partner failure → compensation | Refunded on Tempo in reverse order | [0xb13fd060…](https://explore.testnet.tempo.xyz/tx/0xb13fd06043c4647bbcdeb9e53313f02f845443e8ddcd17a57a468758a8ae229d) → refund [0x67790303…](https://explore.testnet.tempo.xyz/tx/0x6779030377fb90884212fa7f5d3acc681958856b7ce22406862f7d2e0940c944) |
+| Vault movements reconciled | 4/4 matched, clearing nets to zero | — |
+
+<Note>
+Compensation is a real on-chain Tempo transfer, not a simulated rollback. The refund transaction is linked above and is verifiable on the Tempo Moderato explorer.
+</Note>
+
+## D5–D6 — Zcash Ironwood shielded batch (30 Sep)
+
+`pnpm zcash:spike` produced a single Ironwood shielded transaction paying three recipients. Each recipient's wallet decoded its own encrypted invoice memo (`INV-2026-10-00x / corridor:<ref>`). An auditor holding only the period account's viewing key — not the treasury key — reconciled all three outputs against the ledger and saw nothing else.
+
+| What was tested | Result | Transaction |
+|---|---|---|
+| One shielded tx, 3 recipients, Ironwood pool | ✅ | [de5d2562…](https://testnet.zcashexplorer.app/transactions/de5d25625a372d6d79d0b071f0727cdcf8a8718c48d69057fd060825c09d4a7b) |
+| Encrypted invoice memos readable per recipient | ✅ | — |
+| Auditor viewing key: 3/3 matched | ✅ | — |
+
+Tooling: `zcash-devtool` (librustzcash, Ironwood-aware), synced through `testnet.zec.rocks`. Memos are only present after `enhance` following compact-block sync.
+
+## D7 — FROST 2-of-3 vault (30 Sep)
+
+`pnpm zcash:frost` ran the FROST threshold signing flow against a vault whose spending key exists only as shares (RedPallas ciphersuite, rerandomized per action). The test confirmed that a single signer cannot authorize a spend and that any two of three can.
+
+| Scenario | Result | Transaction |
+|---|---|---|
+| Signer 2 alone attempted to sign | Refused (below threshold) | — |
+| Signers 1 + 3 co-signed | Authorized | [878b44b8…](https://testnet.zcashexplorer.app/transactions/878b44b81d518e5d5333f9d21e5f4d6017c6ce16afbdf484eb7a038b7edd355c) |
+| 3 recipients, encrypted invoice memos | ✅ | — |
+| Auditor viewing key: 3/3 matched | ✅ | — |
+
+Rust tests: any 2 of 3 shares verify under `rk`; 1 of 3 fails; keygen yields a valid Ironwood viewing key and address.
+
+## D3 — Across bridge deposit (30 Sep, partial)
+
+The Across adapter (`@corridor/bridge-across`) was verified with a live testnet deposit from Base Sepolia to Solana devnet.
+
+| Run | Result | Transaction |
+|---|---|---|
+| Live deposit, Base Sepolia → Solana devnet, 2 USDC | USDC burned; Circle CCTP v2 attestation complete | [0x782d8b52…](https://sepolia.basescan.org/tx/0x782d8b52d1278892e5215a7a72bf731fa0e205a9274f38f99e0bcb9992c76e02) |
+| Final Solana mint | Pending — restricted to Across's designated `destinationCaller` (its testnet relayer), which had not executed after 2+ hours | — |
+| Mainnet quotes verified (29 Sep) | Tempo USDC.e → Base USDC: ~1 s fill, fee ≈ $0.004 · Base USDC → Solana USDC: ~8 s fill, fee ≈ $0.0006 | Quote only |
+
+<Note>
+The incomplete mint is a constraint of Across's testnet infrastructure, not the adapter code. The same code runs on mainnet, where the relayer executes promptly. The mainnet run proceeds once the funded demo float arrives.
+</Note>
+
+## D4 — Partners, webhooks, Solana leg, and importer flow (30 Sep)
+
+`pnpm payout:demo` closed the public-lane saga end to end (5/5 matched). `pnpm importer:demo` ran the full importer flow: ₦1,560,000 collected via a virtual bank account → 1,000 USDC bridged into the Tempo hub → ¥7,140 paid to a Shenzhen supplier (4/4 matched).
+
+| Flow | Result | Transaction |
+|---|---|---|
+| Payout EUR → NGN, 5 pathUSD | 5/5 matched | [0x218d2a96…](https://explore.testnet.tempo.xyz/tx/0x218d2a964c5e43ab741bd7a8b85e2f5cd37f2b9148c3c450228752c9efd5d1b1) |
+| Collection ₦1,560,000 → hub (1,000 USDC credited) | Completed | [0x100fde2c…](https://explore.testnet.tempo.xyz/tx/0x100fde2c5d68f4eeb38e1fb4993abae78960023c1a3ab3f6a2b96289901961b0) |
+| Payout NGN → CNY, 1,000 pathUSD, ¥7,140 to Shenzhen supplier | Completed, 4/4 matched | [0x671161f6…](https://explore.testnet.tempo.xyz/tx/0x671161f61c70a0b5b33c6c8de4221c938d86c310958725146ea9f21517957b5e) |
+| Solana devnet partner funding | USDC transfer with `corridor:<ref>` in Memo program logs | [nDGHfRgM…](https://explorer.solana.com/tx/nDGHfRgMgK1Xc8gjE3bqUvgfp5qP13HnP6nTtLQGBSqaLLtdDfg2nXYPEzbHfcwpYjv1xQFedMcRh3KkJyRZicH?cluster=devnet) |
+
+The NGN → CNY payout carries Corridor Reference `0x020128460001a0eb3fe7e57ca994eb596e7f87c87f33d74bd58688d853957c1f` in its `TransferWithMemo` log. It decodes to: version 2, kind payout, NGN → CNY, public lane, payment id `01a0eb3f-e7e5-7ca9-94eb-596e7f87c87f`, valid checksum. See [Corridor Reference](/concepts/corridor-reference).
+
+## D8+1 — Full shielded lane through the saga engine (30 Sep)
+
+The console action "Pay 3 suppliers privately" ran the complete `reserve → near.swap → zcash.shieldedBatch` path through the saga engine. Every leg — Tempo funding, NEAR Intents swap, FROST vault delivery, and Solana partner funding — produced a real on-chain transaction.
+
+| Leg | Detail | Transaction |
+|---|---|---|
+| NEAR Intents live quote | $15 → 0.01022830 ZEC (~$1,466.52/ZEC) | Quote only |
+| Tempo treasury → swap escrow | Real Tempo leg with batch reference as memo | [0xbafdbde3…](https://explore.testnet.tempo.xyz/tx/0xbafdbde30386b736fb7151df338ebacc395843575704303fe5e438c17bb760a5) |
+| Real testnet ZEC delivered to FROST vault | Sized from the live NEAR Intents quote | [1f05d641…](https://testnet.zcashexplorer.app/transactions/1f05d6415ad694bdc3ecffc06ef57eb9b859b2fbc1c5724601faf5bf806ee720) |
+| Saga held at 1 approval, co-signed by signers 1 + 3 | FROST batch broadcast: 3 recipients, 20,000-zat fee booked to `expense:zcash-fees` | [ba4e845b…](https://testnet.zcashexplorer.app/transactions/ba4e845b81b7d6faf350fd01cf967d9d35d717d5bc3eb455eb48ee945b3c38c7) |
+| Solana devnet partner funding | Corridor memo in Memo program logs | [nDGHfRgM…](https://explorer.solana.com/tx/nDGHfRgMgK1Xc8gjE3bqUvgfp5qP13HnP6nTtLQGBSqaLLtdDfg2nXYPEzbHfcwpYjv1xQFedMcRh3KkJyRZicH?cluster=devnet) |
+| Cross-chain reconciliation | **31/31 matched** (Tempo 17, partners 4, Zcash 10) | — |
+
+## Vault accounting
+
+The vault observer reports all TIP-20 transfers from each vault — including fee transfers to the Fee Manager (`0xfeec…`) and deposits from approved funding sources — and books them exactly once per log. `checkVaults` then compares the on-chain balance against the ledger total.
+
+| Measure | Value |
+|---|---|
+| Treasury on-chain balance (Moderato) | 1,000,051.994555 pathUSD |
+| Ledger total | 1,000,051.994555 pathUSD |
+| Tempo fees booked to `expense:gas` | 10 fees · 0.005445 pathUSD total |
+| Full reconciliation | **45/45 matched** (Tempo 30, partners 5, Zcash 10) |
+
+## Code
+
+| Measure | Value |
+|---|---|
+| TypeScript tests | 71 passing |
+| Rust tests (`corridor-frost`) | 3 passing: any 2 of 3 verify under `rk`, 1 of 3 fails, keygen yields a valid Ironwood viewing key and address |
+| Live demo | [udoka-am.github.io/corridor/console](https://udoka-am.github.io/corridor/console/) |
+| License | MIT |

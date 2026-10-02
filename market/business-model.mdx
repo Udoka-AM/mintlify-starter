@@ -1,0 +1,97 @@
+---
+title: "Corridor's Revenue Model and Pricing Structure"
+sidebarTitle: "Business Model"
+description: "Four revenue lines, an all-in take of ~0.30% on settled volume, unit economics for a mid-size operator, and the compliance posture that makes it work for licensed PSPs."
+---
+
+Corridor earns where it creates value: when money settles, when it converts currencies, while it waits in transit, and on the software your treasury team runs every day. The all-in take lands at approximately **0.30% of every dollar settled** — a fraction of what the same payment costs through correspondent banks today.
+
+## Revenue lines
+
+| Revenue stream | Indicative pricing | Charged on |
+|---|---|---|
+| Settlement fee | 10–30 bps of volume (per corridor) | Every payout and collection settled through the hub |
+| FX spread share | ~10 bps | Conversions priced by liquidity partners, a share passed to Corridor |
+| Treasury & reconciliation SaaS | $1,500–$3,000 per month | Per customer, tiered by number of corridors and monthly volume |
+| Float yield | Share of yield | Customer stablecoin balances held between payments, deployed in approved yield venues |
+
+<Tip>
+  The settlement fee varies by corridor and volume tier. Reach out to discuss indicative pricing for your specific flow — the quote engine gives you a firm rate before funds move.
+</Tip>
+
+## Unit economics: one mid-size customer
+
+A payout company settling $5 million a month through Corridor:
+
+| Item | Value |
+|---|---|
+| Annual settled volume | $60M |
+| All-in take (settlement + FX + yield) | ~0.30% |
+| Treasury & reconciliation software | ~$24,000 per year |
+| **Total annual revenue to Corridor** | **~$200,000** |
+
+## Revenue at scale: shares of the regional flow
+
+Last year, Sub-Saharan Africa moved roughly [$88 billion in stablecoins](/market/stablecoin-flows). The 2028 column below assumes flows grow at 40% per year — below last year's actual 52% — which gives approximately $242 billion by 2028.
+
+| Share of flow captured | Settled volume (today) | Revenue (today) | Settled volume (2028) | Revenue (2028) |
+|---|---|---|---|---|
+| 1% | $0.9B | $2.6M | $2.4B | $7.3M |
+| 5% | $4.4B | $13.2M | $12.1B | $36.3M |
+| 10% | $8.8B | $26.4M | $24.2B | $72.6M |
+| 15% | $13.2B | $39.7M | $36.3B | $108.9M |
+
+<Note>
+  These are illustrative projections based on current market data, not forward-looking forecasts. The interactive version — with adjustable growth rates and capture assumptions — lives on the [Corridor website](https://udoka-am.github.io/corridor/#economics).
+</Note>
+
+## Why the margin holds
+
+The economics are durable for four structural reasons:
+
+- **Network effects.** Each payout or ramp partner added reaches every customer and every region simultaneously. You get more corridors without more integrations, which raises the cost of switching away from Corridor.
+- **Treasury lock-in.** Your ops team runs daily treasury management, pre-funding forecasts, and reconciliation on the Corridor console. That console becomes the system of record, not just a pipe.
+- **Data compounds.** Pre-funding forecasts improve as Corridor accumulates volume-per-corridor history, and reconciliation logs build into audit evidence over time.
+- **Cheap rails underneath.** Hub settlement costs fractions of a cent per transfer on Tempo. Cross-chain bridge hops cost fractions of a cent on Across. The 0.30% take is margin, not cost pass-through.
+
+## Who Corridor is for
+
+Corridor is built for licensed operators who already move money across borders and want better infrastructure under their existing product:
+
+<CardGroup cols={2}>
+  <Card title="Licensed PSPs & MTOs" icon="building-columns">
+    Payment service providers and money-transfer operators with active licences who need stablecoin settlement rails without running their own on-chain treasury.
+  </Card>
+  <Card title="Remittance operators" icon="globe">
+    Operators running EU/UK/US → NGN, KES, or GHS corridors — companies like LemFi, Afriex, Nala, and similar diaspora-focused platforms.
+  </Card>
+  <Card title="Payout & disbursement companies" icon="money-bill-transfer">
+    Platforms disbursing payroll, gig-economy earnings, or B2B payments to African recipients at scale, including Grey, Cleva, Leatherback, and Chipper Cash-type operators.
+  </Card>
+  <Card title="Cross-border B2B & importers" icon="ship">
+    Importers and B2B platforms paying suppliers in China, India, the UAE, Hong Kong, and the Americas from NGN or KES balances.
+  </Card>
+</CardGroup>
+
+## Compliance posture
+
+Corridor is infrastructure for regulated operators, not a replacement for your compliance programme.
+
+- **You own KYC/KYB.** Your business holds the money-transmission licences and owns the KYC and KYB relationships with your end customers. Corridor does not interact with retail senders or recipients directly.
+- **Corridor runs KYB on its customers.** Every operator onboarded to Corridor goes through business due-diligence checks. Counterparty wallets and sanctions lists are screened on every settlement.
+- **Fiat touchpoints go through regulated ramp partners.** Every on- and off-ramp in each corridor operates through a regulated local partner. Corridor does not hold or transmit fiat directly.
+- **Outbound regulated flows are reference-linked.** For flows that carry documentary requirements — such as Form M filings in Nigeria — Corridor carries compliance references in the saga data, giving your compliance team a complete audit trail tied to each settlement.
+
+## Go-to-market sequence
+
+<Steps>
+  <Step title="Land">
+    Start with licensed payout companies paying into Africa, beginning with the EUR → NGN corridor — the highest-volume, highest-friction flow in the diaspora remittance market.
+  </Step>
+  <Step title="Reverse the flow">
+    Activate outbound import corridors for the same customers: NGN → CNY is the first target, serving importers paying Chinese suppliers on the same integration already in place.
+  </Step>
+  <Step title="Add spokes">
+    Every new ramp or payout partner onboarded becomes an additional spoke for every customer on the hub — broadening corridor coverage without requiring individual integrations.
+  </Step>
+</Steps>

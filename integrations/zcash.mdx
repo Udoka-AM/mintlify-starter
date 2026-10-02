@@ -1,0 +1,129 @@
+---
+title: "Zcash Ironwood: Private Supplier Payments"
+sidebarTitle: "Zcash"
+description: "Shielded B2B supplier payments and payroll via Zcash Ironwood: one transaction per batch, encrypted invoice memos, per-period vaults, and auditor disclosure through viewing keys."
+---
+
+On a public chain, every supplier price and every salary is visible to competitors. Importers will not put that data on a block explorer. Corridor's shielded lane pays through **Zcash's Ironwood pool**: the amounts and recipients are private from the public, but fully auditable by whoever holds a viewing key scoped to that customer and period.
+
+## What each party sees
+
+| Party | Sees |
+|---|---|
+| The public | One funding transfer into the vault. Nothing about who was paid or how much. |
+| Each supplier | Their own payment and an encrypted invoice memo: `INV-2026-10-001 / corridor:<ref>` |
+| The auditor | Exactly one vault's payouts for one period, through a read-only viewing key that cannot spend |
+| Corridor's ledger | Everything, reconciled against the same viewing-key scan the auditor can run |
+
+## Zcash Ironwood
+
+Orchard has been sealed since NU6.3 (July 2026). All new notes land in the **Ironwood pool**. Corridor's tooling (`zcash-devtool` on librustzcash) is Ironwood-aware and syncs through `testnet.zec.rocks`. The production path is the Z3 node stack and Zallet.
+
+## Vault model
+
+Each `(customer, period)` gets its own shielded **vault** — a ZIP-32 account, or a [FROST](/integrations/frost) vault whose spend authority is split across signers. A vault has its own viewing key.
+
+Disclosing one customer's October payments reveals nothing about any other customer, any other period, or the Corridor treasury. The ledger accounts follow the same shape: `customer:acme:ZEC:zcash_ironwood` is isolated from every other customer's venue account.
+
+## A batch is one transaction
+
+<Steps>
+  <Step title="Payment request">
+    The recipients, amounts (in zatoshi), and memos are assembled into a **ZIP-321** payment request URI.
+
+    ```ts
+    import { buildPaymentRequest } from "@corridor/chain-zcash";
+    import { toZcashMemo } from "@corridor/core";
+
+    const uri = buildPaymentRequest([
+      {
+        address: supplierUnifiedAddress,
+        zatoshi: 3_400_000n,  // 0.034 ZEC
+        memo: toZcashMemo({ text: "INV-2026-10-001 / corridor:02...", ref }),
+      },
+      {
+        address: payrollRecipient,
+        zatoshi: 5_100_000n,
+        memo: toZcashMemo({ text: "OCT-SALARY / corridor:02...", ref }),
+      },
+    ]);
+    // zcash:?address=u1...&amount=0.034&memo=...&address.1=u1...&amount.1=0.051&memo.1=...
+    ```
+  </Step>
+  <Step title="Build (unsigned PCZT)">
+    `zcash-devtool pczt create --payment-uri …` builds **one shielded transaction with N outputs** as an unsigned PCZT (partially constructed Zcash transaction). Each output carries a **ZIP-302** text memo encrypted to its recipient — only the recipient and viewing-key holders can read it.
+
+    ```ts
+    wallet.pcztCreateBatch(accountUuid, payments, "/tmp/batch.pczt");
+    ```
+  </Step>
+  <Step title="Prove">
+    `pczt prove` adds the zero-knowledge proofs. No spending key is needed at this step.
+
+    ```ts
+    wallet.pcztProve("/tmp/batch.pczt", "/tmp/proven.pczt");
+    ```
+  </Step>
+  <Step title="Authorize">
+    A single-key vault signs directly. A FROST vault waits for its threshold of approvals, then `corridor-frost` co-signs with exactly the approving signers. See [FROST 2-of-3](/integrations/frost).
+  </Step>
+  <Step title="Combine and send">
+    `pczt combine` merges the proven and signed PCZTs. `pczt send` broadcasts.
+
+    ```ts
+    wallet.pcztCombine(["/tmp/proven.pczt", "/tmp/signed.pczt"], "/tmp/combined.pczt");
+    const txid = wallet.pcztSend("/tmp/combined.pczt");
+    ```
+
+    The ZIP-317 fee is reserved from the delivered ZEC before the batch is built and booked to `expense:zcash-fees` from the mined transaction.
+  </Step>
+</Steps>
+
+## Memo format
+
+Each output's memo is 512 bytes, encrypted to the recipient's incoming viewing key. The first part is a human-readable invoice reference; the second part is the Corridor Reference. Only the recipient and anyone holding the vault's viewing key can decrypt it.
+
+```
+INV-2026-10-001 / corridor:02...<64 hex chars>
+```
+
+Compact blocks do not carry memos. After `sync`, Corridor runs `enhance` to fetch full transaction data and decrypt memos before reconciliation.
+
+## Inside the saga engine
+
+The shielded lane is not a separate subsystem. `privacy: "shielded"` is a route constraint that causes the planner to end the path in the `zcash_ironwood` venue:
+
+| Environment | Route |
+|---|---|
+| Testnet | `ledger.reserve → near.swap → zcash.shieldedBatch` |
+| Mainnet | `ledger.reserve → across.bridge (Tempo → Base) → near.swap (Base USDC → ZEC) → zcash.shieldedBatch` |
+
+The same saga engine, ledger, compensation rules, and reconciliation apply. Failures after broadcast go to `manual_review`.
+
+## Reconciliation
+
+The shielded observer (`shieldedObservations`) reads the wallet's SQLite database read-only and turns each decrypted output into an `Observation` for the reconciliation engine. The matcher joins on the Corridor Reference extracted from the memo, just as it does for Tempo and Solana. An auditor's view-only wallet running the same scan produces the same observations.
+
+## Auditor disclosure
+
+The console's **Export auditor disclosure** returns the vault's unified full viewing key (UFVK), its scope, what it reveals, and how to verify independently:
+
+```bash
+zcash-devtool wallet init-fvk \
+  --name audit \
+  --fvk <viewingKey> \
+  --birthday <blockHeight>
+
+zcash-devtool wallet sync
+zcash-devtool wallet list-tx
+```
+
+The auditor sees exactly the outputs for that vault and nothing else — no other customers, no other periods, no treasury movements.
+
+## Testnet evidence
+
+| Run | Transaction |
+|---|---|
+| Single-key batch: 3 recipients, memos read in each wallet, auditor matched 3/3 | [`de5d2562…`](https://testnet.zcashexplorer.app/transactions/de5d25625a372d6d79d0b071f0727cdcf8a8718c48d69057fd060825c09d4a7b) |
+| FROST 2-of-3 batch: signers 1 + 3 co-signed, 3 recipients | [`878b44b8…`](https://testnet.zcashexplorer.app/transactions/878b44b81d518e5d5333f9d21e5f4d6017c6ce16afbdf484eb7a038b7edd355c) |
+| Full saga: reserve → NEAR swap → FROST approval → batch broadcast | [`ba4e845b…`](https://testnet.zcashexplorer.app/transactions/ba4e845b81b7d6faf350fd01cf967d9d35d717d5bc3eb455eb48ee945b3c38c7) |

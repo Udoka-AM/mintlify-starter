@@ -1,0 +1,96 @@
+---
+title: "Corridor Roadmap: Testnet to Mainnet"
+sidebarTitle: "Roadmap"
+description: "Where Corridor stands today on testnets, what is built and pending mainnet funding, what is simulated, and what comes next."
+---
+
+Every lane runs end to end on testnets through one ledger, one saga engine, and one reconciliation engine — 45/45 reconciled and the treasury vault balanced to the microunit. The remaining step to mainnet is a small funded float and a Paj business API key; no code changes are required. This page explains the current state of each capability and the path forward.
+
+## What is live today (testnet)
+
+<CardGroup cols={2}>
+  <Card title="Tempo settlement" icon="circle-check">
+    `transferWithMemo` on Moderato testnet, found by indexed memo topic, booked exactly once. Settlement saga with on-chain compensation in reverse order.
+  </Card>
+  <Card title="Hub-and-spoke routing" icon="circle-check">
+    Route planner enforces the Tempo hub. 32 currencies across Africa, Asia, the Americas, and Europe. Tested.
+  </Card>
+  <Card title="Solana partner funding" icon="circle-check">
+    Real USDC transfer on Solana devnet with `corridor:<ref>` in the SPL Memo program logs.
+  </Card>
+  <Card title="Zcash Ironwood shielded batches" icon="circle-check">
+    One shielded transaction, three recipients, encrypted invoice memos. Auditor views only their scoped period — nothing from the treasury.
+  </Card>
+  <Card title="FROST 2-of-3 vault control" icon="circle-check">
+    Signer 2 alone refused. Signers 1 + 3 co-signed. Any 2 of 3 can authorize; 1 of 3 cannot.
+  </Card>
+  <Card title="NEAR Intents pricing (USD → ZEC)" icon="circle-check">
+    Live mainnet 1Click quotes. Testnet delivery is real testnet ZEC into the FROST vault, sized from the live quote.
+  </Card>
+</CardGroup>
+
+## What is built and pending mainnet funding
+
+The Across bridge adapter (`@corridor/bridge-across`) is complete and has been exercised with a live testnet deposit. Mainnet quotes are verified: Tempo USDC.e → Base USDC fills in ~1 second at a fee of ~$0.004; Base USDC → Solana USDC fills in ~8 seconds at ~$0.0006.
+
+Across has no Tempo testnet deployment, so the testnet route uses a simulated fill with the same interface and the same compensation logic. The mainnet run — Tempo → Base → Solana, two saga legs each with their own compensation — goes ahead once the funded demo float lands.
+
+## What is simulated
+
+The partner fiat leg runs against a mock that mirrors Paj's full API lifecycle: `open → processing → completed | failed`, HMAC-SHA256 signed webhooks, exactly-once funding, and `manual_review` on post-funding failure. A Paj business API key is the only thing needed to switch this to production. No code changes are required.
+
+<Note>
+Moving to mainnet needs approximately **$30–50 USDC** as a funded float across the Tempo vault, Base relay wallet, and Solana vault, plus a **Paj business API key**. Keys are generated locally by `pnpm mainnet:wallets` and never leave the machine.
+</Note>
+
+## Steps to mainnet
+
+<Steps>
+  <Step title="Fund the mainnet wallets">
+    Fund the generated mainnet wallets (Tempo vault, Base relay, Solana vault) with a small USDC float — approximately $30–50 total. Keys are generated locally and never committed.
+  </Step>
+  <Step title="Run the live Across bridge leg">
+    Run `across.bridge` Tempo → Base on mainnet with micro-amounts. Mainnet quotes are already verified; the adapter is the same code on testnet and mainnet.
+  </Step>
+  <Step title="Activate the Paj partner adapter">
+    Supply a Paj business API key. The adapter is already built against Paj's OpenAPI v2 spec. A naira payout becomes: Tempo → Base (one Across hop) → Paj → Nigerian bank account.
+  </Step>
+  <Step title="Run mainnet shielded funding">
+    `near.swap` from Base USDC to ZEC through NEAR Intents, delivered straight to the FROST vault's unified address. NEAR Intents has no Tempo market, so this leg starts from Base.
+  </Step>
+</Steps>
+
+## What is next
+
+| Area | Current state | Next step |
+|---|---|---|
+| Partner fiat collection | Simulated (Paj-shaped mock) | Paj business API key; live NGN virtual bank accounts and payout orders |
+| Live fiat collection | Out of scope for testnet | PSP webhook delivers a signed event; the collection → credit legs are already built |
+| Production custody | Locally generated keys in `.env.local` / `.keys/` | KMS-wrapped keys or MPC per vault |
+| FROST in production | Trusted-dealer keygen; both rounds in one process | Distributed key generation; each signer on their own device relaying through `frostd` |
+| Yield on float | Out of scope | Execute yield on idle pathUSD in the treasury vault |
+| Design partners | Paj for NGN; candidates identified for KES, CNY/HKD, and other regions | EUR → NGN with licensed payout companies first, then importer corridors |
+
+## Production hardening reference
+
+| Component | Today | Production |
+|---|---|---|
+| Database | PGlite (embedded Postgres) | Managed Postgres, same schema and triggers |
+| Custody | Local keys in `.env.local` / `.keys/` | KMS-wrapped keys or MPC per vault |
+| FROST | Trusted-dealer keygen; both rounds in one process | DKG; each signer on their own device via `frostd` |
+| Console | Local, unauthenticated actions | Authenticated, role-based; disclosure and action endpoints behind auth |
+| Zcash stack | `zcash-devtool` | Z3 node stack and Zallet |
+
+## Known gaps
+
+<AccordionGroup>
+  <Accordion title="Solana and Base gas are not booked yet">
+    Tempo vault gas is booked from the chain — each fee is a TIP-20 transfer to the Fee Manager and is observed and posted to `expense:gas`. SOL fees on the Solana egress wallet and Base ETH fees on the relay wallet are not yet observed or booked the same way.
+  </Accordion>
+  <Accordion title="Lease fencing">
+    A saga worker whose lease expired mid-leg could still finish its call. Legs are idempotent through the on-chain memo lookup, so the chain is never double-spent, but a fencing token on ledger bookings would make this airtight and prevent any double-credit in edge cases.
+  </Accordion>
+  <Accordion title="Across testnet relayer">
+    Across has no Tempo testnet deployment, and its testnet CCTP relayer did not complete a Base Sepolia → Solana devnet mint after 2+ hours. Circle's CCTP v2 attestation was complete on the deposit side. This is a constraint of Across's testnet infrastructure; the mainnet relayer executes promptly.
+  </Accordion>
+</AccordionGroup>

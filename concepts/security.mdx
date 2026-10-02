@@ -1,0 +1,96 @@
+---
+title: "Security Model: Vault Control and Compliance"
+sidebarTitle: "Security"
+description: "FROST threshold signing, scoped viewing keys, HMAC webhook verification, exactly-once funding, compliance screening, and how Corridor keeps secrets out of source control."
+---
+
+Corridor's security model is designed for licensed payment companies moving regulated money. The controls described here cover vault custody, partner input validation, customer privacy, compliance screening, and the safeguards that prevent secrets from leaking into logs or published snapshots.
+
+## Shielded vault custody with FROST 2-of-3
+
+Shielded vaults are not controlled by a single private key. Each vault's spend-authorizing key `ak` is a FROST group key split three ways across the customer approver, the customer finance lead, and Corridor. Nobody holds the complete spending key.
+
+<CardGroup cols={2}>
+  <Card title="No single point of compromise" icon="key-round">
+    Any two of the three signers can authorize a spend; one alone is refused. If any single share is compromised, funds cannot be moved without a second co-signer.
+  </Card>
+  <Card title="Threshold verified cryptographically" icon="shield-check">
+    Before signing, `corridor-frost` checks that the randomized key `rk` equals `ak + [alpha]G` for the vault's group key. A signer set below the threshold is refused at the cryptographic level, not just at the application level.
+  </Card>
+</CardGroup>
+
+The FROST signing flow:
+1. `corridor-frost keygen` produces 3 shares. The group verifying key must have a positive-y encoding; keygen retries until this holds.
+2. `zcash-devtool` builds the unsigned batch as a PCZT and proves it.
+3. `corridor-frost sign` runs both FROST rounds rerandomized by each action's `alpha`, aggregates, verifies the RedPallas signature against `rk`, and applies it.
+4. A signer set below the threshold is refused. The PCZT is broadcast only after threshold is met.
+
+<Note>
+In the current demo, the trusted dealer model is used for key generation and both FROST rounds run in one process over separate share files. In production, each signer holds their share on their own device and rounds are relayed through `frostd`. The cryptography and the PCZT interface are unchanged between demo and production.
+</Note>
+
+## Viewing keys scoped to customer and period
+
+An auditor disclosure does not grant access to the full vault or to any other customer's data. Corridor issues a unified full viewing key scoped to a single `(customer, period)` combination:
+
+- The key reveals every Ironwood output in that vault for that period, with their amounts, addresses, and encrypted invoice memos.
+- The key is **read-only** — it cannot construct or sign a spend.
+- An auditor imports it into a view-only wallet and syncs independently, without needing access to Corridor's systems.
+- Nothing outside the scoped vault is visible.
+
+## Customer identity protected in public memos
+
+Every Tempo transfer and Solana transaction carries a Corridor Reference in the chain's native memo field. Bytes 21–27 of the reference contain a **customer tag** — a 7-byte keyed HMAC of the customer identifier. Someone reading the public memo cannot reverse the tag to identify the customer; only a party holding the reference secret can verify which customer a reference belongs to.
+
+```text
+bytes 21–27   customer tag (7 bytes, keyed hash of customer ID)
+```
+
+The secret (`CORRIDOR_REF_SECRET`) is stored in the environment and never committed to source control.
+
+## Webhook verification
+
+Partner deliveries and Corridor's own mock partner use the same verification scheme:
+
+```text
+X-PAJ-Timestamp: <unix seconds>
+X-PAJ-Signature: v1=<hex HMAC-SHA256(secret, "<timestamp>.<raw body>")>
+```
+
+- The timestamp must be **within 5 minutes** of the server clock. Replayed deliveries outside this window are rejected.
+- The `v1=` value is compared using `timingSafeEqual` — constant-time comparison prevents timing-based forgery detection.
+- During a secret rotation, a header may carry multiple schemes; any valid `v1` passes.
+- Each order status is stored **once**. Redeliveries are acknowledged without effect. Forgeries receive a `401` and change nothing in the system.
+
+## Exactly-once funding
+
+A partner payout records its partner order and the funding transaction durably (`partner_order_links`) before marking the step complete. If a worker crashes after opening an order, the retry reuses the same order. If it crashes after funding, the retry sees the funding reference and does not send again. A partner failure **after** funding stops at `manual_review` — the money is at the partner until its refund is confirmed, and earlier legs are not automatically reversed until that is settled.
+
+## Compliance
+
+Corridor is infrastructure for licensed payment companies, not a payments institution itself. The compliance model reflects this:
+
+| Area | How it works |
+|---|---|
+| KYB | Corridor runs Know Your Business checks on its customers before onboarding |
+| Counterparty screening | Corridor screens counterparties and wallets against sanctions lists before each flow |
+| Travel Rule | Travel Rule data travels in the Corridor Reference memo and in an off-chain payload alongside each saga, so regulated ramp partners receive the required beneficiary and originator information |
+| Fiat touchpoints | All fiat on-ramps and off-ramps go through regulated ramp partners (e.g., Paj, FossaPay, Yellow Card); Corridor does not hold fiat or banking licenses |
+| Audit trail | The append-only ledger, saga event log, and reconciliation records together form a complete audit trail that can be exported per customer and period |
+
+## Key management and secrets hygiene
+
+| Key | Demo location | Production |
+|---|---|---|
+| Tempo vault, Base relay, Solana vaults | `.env.local`, `.keys/` (gitignored, generated locally) | KMS-wrapped keys or MPC, per vault |
+| Corridor Reference secret | `.env.local` | Secret manager; rotation by reference version |
+| FROST shares | `.keys/frost-treasury/signer-<n>.json`, one per signer | Distributed key generation; each share on its signer's device |
+| Partner API keys and webhook secrets | `.env.local` | Secret manager |
+
+Keys are never committed, printed to logs, or sent anywhere outside the local environment. The public console snapshot enforces this programmatically:
+
+<Warning>
+`pnpm console:snapshot` scans every recorded API response for every value in `.env.local` and every secret file under `.keys/`, and **refuses to publish** if any match is found. This check runs automatically on every snapshot build.
+</Warning>
+
+This means the public demo at [udoka-am.github.io/corridor/console](https://udoka-am.github.io/corridor/console/) is provably free of any secret that was present at snapshot time.

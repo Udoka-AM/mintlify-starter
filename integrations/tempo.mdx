@@ -1,0 +1,188 @@
+---
+title: "Tempo: The Settlement Hub for Corridor"
+sidebarTitle: "Tempo"
+description: "How Corridor uses Tempo for sub-second stablecoin settlement: pathUSD as the unit of account, memo-indexed reconciliation, and gas paid in stablecoins."
+---
+
+Tempo is a payments-first EVM chain, incubated by Stripe and Paradigm, built around a native stablecoin DEX and a fee model with no gas token. Corridor holds every customer balance on Tempo, settles every flow through it, and reconciles against its on-chain logs — making it the authoritative source of truth for the treasury.
+
+<CardGroup cols={2}>
+  <Card title="Memos are first-class" icon="fingerprint">
+    TIP-20 `transferWithMemo` takes a `bytes32` memo and emits it as an **indexed topic** on the `TransferWithMemo` event. The 32-byte Corridor Reference fits exactly, and reconciliation can filter logs by reference using a plain `eth_getLogs` call — no separate indexer required.
+  </Card>
+  <Card title="Gas in stablecoins" icon="fuel">
+    There is no native gas token. Vaults pay fees in pathUSD through the Fee AMM, using the asset they already hold. No ETH float to manage per vault, no cross-asset gas bridging.
+  </Card>
+  <Card title="Sub-second finality" icon="timer">
+    Tempo reaches finality in roughly 0.6 seconds. The settlement hub is never the slow step in a payment flow.
+  </Card>
+  <Card title="A neutral quote token" icon="circle-dollar-sign">
+    pathUSD is Tempo's native quote token, issued by Bridge (a Stripe company). Every USD TIP-20 routes through it on the enshrined stablecoin DEX, so ingress conversion is one atomic transaction.
+  </Card>
+</CardGroup>
+
+## pathUSD as the unit of account
+
+Every stablecoin on Tempo is a TIP-20, including USDC.e (Stargate-bridged USDC at `0x20C000000000000000000000b9537d11c60E8b50`). Corridor treats **pathUSD** as its canonical settlement unit and accepts any USD TIP-20 at the edges:
+
+```text
+Ingress (any USD TIP-20)              Core (Tempo)                     Egress
+USDC.e / USDT0 / pathUSD ──DEX──▶    pathUSD vaults + ledger    ──Across──▶ Base USDC ──▶ partner
+```
+
+pathUSD is supported by Across (`pathUSD (chain 4217) → USDC` on Base, Arbitrum, Ethereum, and others), issued by the Moderato faucet so testnet matches production, and accepted by validators as a fee token.
+
+<Note>
+pathUSD circulating supply is still in the single-digit millions of dollars. Each corridor carries a `settlementAsset` policy: when a ticket exceeds pathUSD depth, the corridor settles in USDC.e instead. Switching is a configuration change, not a migration.
+</Note>
+
+## Networks
+
+| Network | Chain ID | RPC | Explorer |
+|---|---|---|---|
+| Moderato testnet | `42431` | `https://rpc.moderato.tempo.xyz` | `https://explore.testnet.tempo.xyz` |
+| Mainnet | `4217` | `https://rpc.tempo.xyz` | `https://explore.tempo.xyz` |
+
+The Moderato faucet funds an address through the RPC method `tempo_fundAddress`.
+
+## Client setup
+
+Corridor uses viem's built-in Tempo support (`viem/tempo`). The client is configured to pay gas in pathUSD through the Fee AMM:
+
+```ts
+import { createClient, Actions, Addresses } from "viem/tempo";
+import { privateKeyToAccount } from "viem/accounts";
+import { http } from "viem";
+
+const client = createClient({
+  account: privateKeyToAccount(key),
+  testnet: network === "moderato",
+  feeToken: Addresses.pathUsd,            // pay gas in pathUSD
+  transport: http(rpcUrl, { timeout: 30_000, retryCount: 5 }),
+});
+```
+
+The `tempoClient` factory in `@corridor/chain-tempo` wraps this with the correct RPC URL and retry settings for each network:
+
+```ts
+import { tempoClient } from "@corridor/chain-tempo";
+
+const client = tempoClient({
+  network: "moderato",   // or "mainnet"
+  privateKey: vaultKey,
+  rpcUrl: process.env.TEMPO_RPC_URL,
+});
+```
+
+## Ingress conversion: DEX swap
+
+When funds arrive as USDC.e (or another USD TIP-20), Corridor converts them to pathUSD in a single atomic DEX swap on Tempo's enshrined stablecoin DEX before crediting the customer balance. The swap and the memo transfer share one transaction; there is no intermediate step that can fail between them.
+
+## Moving value with `transferWithMemo`
+
+The TIP-20 standard on Tempo extends the standard ERC-20 `transfer` with a 32-byte `memo` parameter:
+
+```solidity
+transferWithMemo(address to, uint256 amount, bytes32 memo)
+```
+
+The `memo` field is emitted as an **indexed topic** on the `TransferWithMemo` event, which means:
+
+- Reconciliation can call `eth_getLogs` with `{ args: { memo: ref } }` and receive every movement carrying that reference directly from the node.
+- No off-chain indexer, no subgraph, no database scan — just a log filter.
+
+Corridor's `transferWithReference` function wraps this and returns a ready-to-book `Observation`:
+
+```ts
+import { transferWithReference } from "@corridor/chain-tempo";
+
+const obs = await transferWithReference(client, {
+  asset: "pathUSD",
+  to: escrowAddress,
+  amount: 1_000_000_000n,    // 1,000 pathUSD (6 decimals)
+  reference: ref,            // 32-byte Corridor Reference
+});
+// obs is the Observation for the resulting TransferWithMemo log
+```
+
+Internally, `tempoMoveOnce` searches for an identical movement (same memo, parties, and amount) since the saga's start block before sending. A retry after a crash between send and bookkeeping finds the existing transfer rather than sending it twice, making every leg exactly-once.
+
+## Fee AMM: gas in pathUSD
+
+Every Tempo transaction pays its fee as a TIP-20 `Transfer` from the fee payer to the Fee Manager at `0xfeec000000000000000000000000000000000000`, logged in the same receipt. On a real 2.000000 pathUSD transfer, the vault's balance falls by 2.000098: 98 base units are the fee, equal to `gasUsed × effectiveGasPrice ÷ 10¹²`, rounded up.
+
+Corridor books each fee a vault pays to the `expense:gas` account, keyed by that log, so the treasury's on-chain balance equals the ledger to the last base unit.
+
+## Vault observer
+
+`TempoObserver` watches the vault addresses from a stored block cursor, paginating in chunks of up to 10,000 blocks per `getLogs` call. It resumes from the cursor on restart, so no event is missed or double-counted.
+
+```ts
+import { TempoObserver } from "@corridor/chain-tempo";
+
+const observer = new TempoObserver(client, {
+  name: "vault-main",
+  asset: "pathUSD",
+  addresses: [vaultAddress],
+  cursors: cursorStore,
+  startBlock: deployedAtBlock,
+  unreferenced: true,    // also report fees and plain deposits
+});
+
+const observations = await observer.poll();
+```
+
+With `unreferenced: true`, the observer reports three movement types:
+
+| Movement | Event | Booked as |
+|---|---|---|
+| Memo-tagged transfer in or out | `TransferWithMemo` | Matched against a saga leg by reference |
+| Fee transfer to Fee Manager | `Transfer` (from vault, to `0xfeec…`) | `expense:gas`, keyed by log |
+| Plain deposit (faucet mint, owner top-up) | `Transfer` (to vault, no memo) | `equity:owner` for approved sources; flagged for review otherwise |
+
+Because `TransferWithMemo` also emits a plain `Transfer`, the observer deduplicates them automatically — only the memo-tagged observation is retained.
+
+`bookVaultMovements` processes the observer's output and posts each movement to the ledger exactly once. Fees are booked to `expense:gas`. Deposits from approved funding sources (testnet faucet mints from the zero address, or addresses listed in `CORRIDOR_FUNDING_SOURCES` on mainnet) are booked to `equity:owner`. Any other deposit without a reference is never credited automatically and remains flagged as "unreferenced" for manual review.
+
+<Tip>
+`findTransfersByReference` lets you check at any time whether a transfer carrying a given reference has already landed on-chain — useful when debugging a saga or verifying a specific settlement:
+
+```ts
+import { findTransfersByReference } from "@corridor/chain-tempo";
+
+const matches = await findTransfersByReference(client, {
+  asset: "pathUSD",
+  reference: corridorRef,
+  fromBlock: sagaStartBlock,
+});
+```
+</Tip>
+
+## Testnet faucet
+
+On Moderato, fund a vault address directly from the RPC without needing a separate faucet service:
+
+```ts
+import { fundFromFaucet } from "@corridor/chain-tempo";
+
+await fundFromFaucet(client, vaultAddress);
+```
+
+This calls the `tempo_fundAddress` RPC method and waits for inclusion.
+
+## Live evidence
+
+<CardGroup cols={2}>
+  <Card title="Memo transfer, booked once" icon="check">
+    `pnpm tempo:smoke` finds the `TransferWithMemo` log by indexed topic and books it exactly once in the ledger. Idempotent on replay.
+  </Card>
+  <Card title="Supplier payout on testnet" icon="arrow-right">
+    A payout to a Shenzhen supplier with a decodable reference: [`0x671161f6…`](https://explore.testnet.tempo.xyz/tx/0x671161f61c70a0b5b33c6c8de4221c938d86c310958725146ea9f21517957b5e)
+  </Card>
+  <Card title="On-chain balance = ledger" icon="equals">
+    Live on Moderato: treasury on-chain **1,000,051.994555 pathUSD** = ledger **1,000,051.994555 pathUSD**, with 10 fee transfers booked from the chain.
+  </Card>
+  <Card title="Full reconciliation" icon="list-check">
+    45/45 observations matched after a complete demo run (Tempo 30, partners 5, Zcash 10).
+  </Card>
+</CardGroup>

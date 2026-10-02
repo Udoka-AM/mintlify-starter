@@ -1,0 +1,88 @@
+---
+title: "NEAR Intents: Swap USDC to ZEC for Shielded Payouts"
+sidebarTitle: "NEAR Intents"
+description: "How Corridor funds shielded vaults: NEAR Intents 1Click API quotes USDC → ZEC and delivers ZEC directly to a Zcash unified address in one saga leg."
+---
+
+Before a shielded batch payout can be authorized and broadcast, the FROST vault needs ZEC. NEAR Intents' **1Click** API swaps USDC to ZEC and delivers it directly to the vault's Zcash unified address, so Corridor never holds ZEC in an intermediate wallet. The `near.swap` leg is one step in the same saga that later calls `zcash.shieldedBatch`.
+
+## 1Click API
+
+| | |
+|---|---|
+| Base URL | `https://1click.chaindefuser.com/v0` |
+| Origin asset (Base USDC) | `nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near` |
+| Destination asset | `nep141:zec.omft.near` |
+
+A dry quote prices the swap without reserving a deposit address:
+
+```ts
+import { quoteSwap, usdPerZec, NEAR_ASSETS } from "@corridor/swap-near";
+
+const quote = await quoteSwap({
+  originAsset: NEAR_ASSETS.baseUSDC,
+  destinationAsset: NEAR_ASSETS.ZEC,
+  amount: 50_000_000n,            // $50 USDC (6 decimal places)
+  recipient: vaultUnifiedAddress,  // ZEC delivered here — no intermediate wallet
+  refundTo: baseRelayWallet,       // USDC refunded here if the swap cannot complete
+  dry: true,                       // price only; no deposit address reserved
+});
+
+const price = usdPerZec(quote);    // implied USD/ZEC rate from the quote
+```
+
+A live (non-dry) quote returns a `depositAddress`. The saga sends USDC there and polls `swapStatus(depositAddress)` until the ZEC delivery is confirmed in the vault.
+
+## Live quote (30 Sep 2026)
+
+| Quote | Value |
+|---|---|
+| $50 USDC → ZEC | 0.0348 ZEC, ~150 s estimated delivery |
+| $15 USDC → ZEC (saga run) | 0.01022830 ZEC (~$1,466.52 per ZEC implied) |
+
+## Why Base USDC
+
+NEAR Intents has no Tempo market. On mainnet the shielded route takes one Across hop from the Tempo hub to Base, then swaps Base USDC to ZEC:
+
+```
+ledger.reserve
+  → across.bridge (Tempo → Base)
+  → near.swap (Base USDC → ZEC, delivered to FROST vault)
+  → zcash.shieldedBatch
+```
+
+Every leg runs through the same saga engine with its own forward step, compensation, and idempotency key.
+
+## On testnet
+
+The testnet `near.swap` leg is fully real except for the swap itself:
+
+1. **Rate:** a live mainnet 1Click quote (dry), so the ZEC amount is priced from real market data.
+2. **Tempo leg:** pathUSD leaves the treasury toward the swap escrow, with the batch reference as memo. [`0xbafdbde3…`](https://explore.testnet.tempo.xyz/tx/0xbafdbde30386b736fb7151df338ebacc395843575704303fe5e438c17bb760a5)
+3. **Delivery:** real testnet ZEC, sized from the live quote, is sent to the FROST vault's unified address with an encrypted memo. [`1f05d641…`](https://testnet.zcashexplorer.app/transactions/1f05d6415ad694bdc3ecffc06ef57eb9b859b2fbc1c5724601faf5bf806ee720)
+
+## Bookings
+
+The `near.swap` leg converts the customer's pathUSD hold into a ZEC liability through a `usd-zec` clearing pair:
+
+```
+customer:acme:pathUSD:tempo      (debit)
+  → clearing:usd-zec             (credit / debit)
+  → customer:acme:ZEC:zcash_ironwood  (credit)
+```
+
+The clearing account nets to zero once the ZEC delivery is booked against the vault output that the viewing-key scanner observes.
+
+## Exactly-once delivery
+
+Each delivery is recorded in `leg_artifacts` with the saga step ID as the idempotency key. If the process crashes after sending USDC to the deposit address, the retry reads the existing artifact and polls `swapStatus` rather than opening a second deposit.
+
+<Warning>
+  If the swap cannot complete (e.g. the ZEC price moved outside the slippage guard), NEAR Intents refunds the USDC to the `refundTo` address. The saga leg compensates by crediting that amount back to the customer's pathUSD balance.
+</Warning>
+
+## What comes next
+
+<Note>
+  The mainnet `near.swap` leg from Base USDC is on the [roadmap](/status/roadmap). The quote and status client (`@corridor/swap-near`) is already in place; the remaining work is wiring the mainnet deposit flow through the Across bridge leg and confirming Tempo market availability on NEAR Intents.
+</Note>

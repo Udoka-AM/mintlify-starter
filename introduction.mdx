@@ -1,0 +1,84 @@
+---
+title: "Corridor: Stablecoin Settlement Rails for Africa"
+sidebarTitle: "Introduction"
+description: "Corridor gives licensed payment companies a single stablecoin treasury on Tempo to fund every African corridor — instant settlement, automatic reconciliation, private supplier payments."
+---
+
+Corridor is settlement and treasury infrastructure for licensed payment service providers, remittance operators, and payout companies moving money into and out of Africa. Instead of pre-funding separate bank accounts in each country, you hold **one pathUSD balance on Tempo** and Corridor handles everything from routing and settlement to reconciliation and compliance references.
+
+<CardGroup cols={2}>
+  <Card title="What Corridor Is" icon="info" href="/what-corridor-is">
+    The product, who it serves, and exactly what runs live today.
+  </Card>
+  <Card title="Quickstart" icon="terminal" href="/quickstart">
+    Run live flows on Tempo Moderato, Solana devnet, and Zcash testnet.
+  </Card>
+  <Card title="How It Works" icon="layers" href="/concepts/hub-and-spoke">
+    Hub-and-spoke routing, the Corridor Reference, settlement engines.
+  </Card>
+  <Card title="Payment Flows" icon="route" href="/flows/payout-eur-ngn">
+    End-to-end walkthroughs: EUR→NGN, NGN→CNY, shielded supplier batch.
+  </Card>
+</CardGroup>
+
+## What you get
+
+<CardGroup cols={2}>
+  <Card title="0.6 s Settlement" icon="timer">
+    Sub-second deterministic finality on the Tempo hub — no waiting on correspondent banks.
+  </Card>
+  <Card title="N Integrations, Not N×N" icon="network">
+    One partner per region. Every spoke can reach every other spoke automatically.
+  </Card>
+  <Card title="Auto-Reconciliation" icon="check-check">
+    A 32-byte Corridor Reference travels in every chain's native memo field so your ledger, chains, and partners reconcile themselves.
+  </Card>
+  <Card title="Shielded Supplier Payments" icon="shield">
+    Keep import prices off public chains with Zcash Ironwood batches, FROST 2-of-3 vault control, and auditor-scoped viewing keys.
+  </Card>
+  <Card title="Treasury Console" icon="landmark">
+    Balance per corridor, 7-day pre-funding forecast, exceptions queue, and one-click auditor disclosure exports.
+  </Card>
+  <Card title="32+ Currencies" icon="globe">
+    Africa, Asia, the Americas, and Europe — all reachable through the same Tempo hub.
+  </Card>
+</CardGroup>
+
+## How a payment flows
+
+Every flow is either a **collection** into the Tempo hub or a **payout** out of it. A Nigerian importer paying a supplier in Shenzhen is a naira collection followed by a yuan payout; a diaspora remittance is a euro collection followed by a naira payout.
+
+```
+Sender (EUR, SEPA)                                 Recipient (NGN, bank / mobile money)
+      │                                                             ▲
+      ▼                                                             │
+Customer PSP ──▶ Corridor Quote ──▶ Settlement Saga ──────────────▶ Off-ramp partner (Solana)
+                      │                  │                                  │
+                      ▼                  ▼                                  │
+               Double-entry      Tempo transfer                             │
+               ledger            (TIP-20, memo=payout_id)                  │
+                      │                                                     │
+                      ▼                                                     │
+               Treasury console ◀─── Reconciliation engine ◀─── Partner webhooks
+```
+
+<Note>
+Corridor is infrastructure, not a money transmitter. You keep your licence, your KYC, and your end-customer relationships. Corridor holds, moves, and reconciles your treasury.
+</Note>
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="The Problem" icon="circle-alert" href="/market/the-problem">
+    Why cross-border payments into Africa are expensive and slow — and what changes.
+  </Card>
+  <Card title="Evidence" icon="file-check" href="/status/evidence">
+    Every testnet transaction, linked to its block explorer.
+  </Card>
+  <Card title="Integrations" icon="plug" href="/integrations/tempo">
+    Tempo, Across, Solana, Paj, Zcash, FROST, and NEAR Intents.
+  </Card>
+  <Card title="Business Model" icon="trending-up" href="/market/business-model">
+    Settlement fees, FX spread share, SaaS platform fees, and float yield.
+  </Card>
+</CardGroup>

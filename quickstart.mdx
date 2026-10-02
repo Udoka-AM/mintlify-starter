@@ -1,0 +1,125 @@
+---
+title: "Quickstart: Run Corridor on Testnet in Minutes"
+sidebarTitle: "Quickstart"
+description: "Clone, install, and drive live settlement flows on Tempo Moderato, Solana devnet, and Zcash testnet in minutes — no database setup required."
+---
+
+Corridor is a TypeScript monorepo managed with pnpm workspaces, plus one Rust service for FROST threshold signing. The ledger runs on embedded Postgres (PGlite) locally, so there is no database to install or configure before you start.
+
+## Prerequisites
+
+Make sure you have the following installed before you begin:
+
+- **Node.js 22 or later** and **pnpm 9** — required for all packages and scripts
+- **Rust stable** — required only for the FROST signer (`services/zcash-frost`) and the Zcash tooling
+- **`zcash-devtool`** — required only for the shielded lane; build it locally from [github.com/zcash/zcash-devtool](https://github.com/zcash/zcash-devtool) with `cargo build --release`, then set the `ZCASH_DEVTOOL` environment variable to point at the compiled binary
+
+## Run Corridor
+
+<Steps>
+  <Step title="Clone and install">
+    Clone the repository and install all workspace dependencies with a single command.
+
+    ```bash
+    git clone https://github.com/Udoka-AM/corridor.git
+    cd corridor
+    pnpm install
+    ```
+  </Step>
+
+  <Step title="Verify the build">
+    Run the type-checker and the full test suite to confirm everything is wired correctly.
+
+    ```bash
+    pnpm typecheck
+    pnpm test
+    ```
+
+    The suite covers ledger invariants, the Corridor Reference codec, route graph and hub enforcement, the saga engine (including forced failures and reverse-order compensation), partner adapters, signed webhook ingest, the Solana SPL memo leg, ZIP-321 shielded batches, NEAR Intents quotes, and vault accounting. All tests run against embedded Postgres — no external services needed.
+  </Step>
+
+  <Step title="Send your first memo transfer on Tempo">
+    Run the smoke test against Tempo Moderato (the public testnet).
+
+    ```bash
+    pnpm tempo:smoke
+    ```
+
+    On first run this script generates testnet keys into `.env.local`, funds the accounts from the Moderato faucet, sends a `transferWithMemo` transaction, finds it again by its indexed memo topic, and books it exactly once in the local ledger. You will see the transaction hash and the matched journal entry printed to the terminal.
+  </Step>
+
+  <Step title="Run the end-to-end flows">
+    Each script drives a complete payment scenario against live testnets.
+
+    ```bash
+    pnpm payout:demo     # EUR → NGN payout saga, including a forced partner failure that compensates on-chain
+    pnpm importer:demo   # NGN collected into the hub, then CNY paid out to a supplier across the hub
+    pnpm zcash:frost     # FROST 2-of-3 threshold-controlled shielded batch on Zcash testnet
+    ```
+
+    <Tip>
+      Run one script at a time. Each demo owns the embedded Postgres ledger exclusively while it runs.
+    </Tip>
+  </Step>
+
+  <Step title="Open the treasury console">
+    Start the treasury console to explore balances, reconciliation, and the settlement timeline in a browser.
+
+    ```bash
+    pnpm console        # opens at http://localhost:4400
+    ```
+
+    <Warning>
+      Stop any running CLI demo scripts before starting the console. The embedded Postgres instance has a single owner, and two processes writing concurrently will conflict.
+    </Warning>
+  </Step>
+</Steps>
+
+## All Scripts
+
+| Command | What it does |
+|---|---|
+| `pnpm typecheck` | TypeScript type-check across all packages |
+| `pnpm test` | Full test suite (embedded Postgres, no external setup) |
+| `pnpm tempo:smoke` | Memo-tagged transfer on Tempo Moderato, observed and booked exactly once |
+| `pnpm payout:demo` | Public payout saga with forced partner failure and on-chain compensation |
+| `pnpm importer:demo` | Collection leg then supplier payout across the hub (NGN in → CNY out) |
+| `pnpm zcash:spike` | Single-key shielded Ironwood batch with encrypted memos |
+| `pnpm zcash:frost` | Threshold-controlled shielded batch from a FROST 2-of-3 vault |
+| `pnpm across:testnet` | Live Across deposit on testnet (Base Sepolia → Solana devnet) |
+| `pnpm mainnet:wallets` | Generate mainnet demo wallets (keys stay in `.env.local` and `.keys/`) |
+| `pnpm console` | Treasury console at http://localhost:4400 |
+| `pnpm console:snapshot` | Record the running console as the static public replay |
+
+<Warning>
+  Private keys are written to `.env.local` and `.keys/`, both of which are gitignored. Never commit them. The `console:snapshot` command refuses to publish if any value from either location appears in its output.
+</Warning>
+
+## Repository Layout
+
+```text
+packages/
+  core/            Venues, currencies, money, the Corridor Reference codec
+  ledger/          Double-entry ledger with invariants (PGlite / Postgres)
+  routing/         Route graph and planner, hub enforcement
+  saga/            Durable saga engine with leases and compensation
+  legs/            Leg implementations (bridge, partner, credit, shielded)
+  chain-tempo/     Tempo client, memo transfers, observer
+  chain-solana/    USDC + SPL Memo transfers, observer
+  chain-zcash/     zcash-devtool wallet, ZIP-321, FROST orchestration
+  bridge-across/   Across Swap API: quote, execute, fill tracking
+  swap-near/       NEAR Intents 1Click quotes and status
+  partners/        RampPartner interface, Paj adapter, mock partner
+  webhooks/        Signed partner webhook ingest
+  recon/           Reconciliation and vault accounting
+services/
+  zcash-frost/     corridor-frost: FROST(RedPallas) keygen and signing (Rust)
+apps/
+  console/         Treasury console (balances, forecasting, recon, disclosures)
+  site/            Public website and console replay
+  docs/            This documentation
+```
+
+<Note>
+  The `packages/core` module defines the 32-byte Corridor Reference and every venue and asset constant used across the monorepo. Start there if you are extending Corridor to a new corridor or chain.
+</Note>

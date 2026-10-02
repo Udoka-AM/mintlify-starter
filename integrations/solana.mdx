@@ -1,0 +1,98 @@
+---
+title: "Solana: USDC Liquidity Spoke for Ramp Partners"
+sidebarTitle: "Solana"
+description: "How Corridor funds and receives from ramp partners on Solana: one atomic transaction with USDC TransferChecked plus an SPL Memo carrying the Corridor Reference."
+---
+
+Solana is the liquidity spoke where ramp partners receive USDC. Corridor keeps two vaults on Solana — **egress** (funds partner payouts) and **ingress** (receives collections) — and every transfer carries the Corridor Reference in the transaction's memo field, so on-chain movements can be joined to ledger entries without decoding token instructions.
+
+## How the transaction is built
+
+Every transfer is one `@solana/kit` transaction with three instructions assembled atomically. Building them is a pure function (`buildTransferWithMemo`) with no network calls, so it is independently testable before the transaction is signed and sent.
+
+<Steps>
+  <Step title="Create the recipient's USDC account if missing">
+    `getCreateAssociatedTokenIdempotentInstruction` creates the partner's associated token account. The instruction is idempotent — if the account already exists it does nothing — so a first-time partner deposit address works without a separate setup step.
+  </Step>
+  <Step title="TransferChecked">
+    `getTransferCheckedInstruction` moves USDC from the Corridor vault to the partner's one-off funding address. The token program verifies the mint address and decimal count on-chain, preventing amount mismatches.
+  </Step>
+  <Step title="SPL Memo">
+    `getAddMemoInstruction` attaches `corridor:<hex>` — the 32-byte Corridor Reference encoded as 64 hex characters — to the transaction log via the Memo program. Because the memo is part of the same transaction, it is either present with the transfer or absent entirely.
+  </Step>
+</Steps>
+
+```ts
+import { SolanaVault } from "@corridor/chain-solana";
+
+const vault = new SolanaVault(signer, "devnet");
+
+const signature = await vault.transferWithReference({
+  toOwner: fundingAddress,   // partner's one-off deposit address (owner, not ATA)
+  amount: 2_000_000n,        // 2 USDC — 6 decimal places
+  reference: ref,            // 0x-prefixed 32-byte Corridor Reference
+});
+```
+
+The full instruction set, typed and tested independently:
+
+```ts
+import { buildTransferWithMemo } from "@corridor/chain-solana";
+
+const instructions = await buildTransferWithMemo({
+  from: vaultSigner,
+  toOwner: address(fundingAddress),
+  mint: USDC_MINT["devnet"],
+  amount: 2_000_000n,
+  decimals: 6,
+  reference: ref,
+});
+```
+
+## Reading the reference back
+
+The Solana RPC returns a `memo` field on each signature record. Its format is `[N] corridor:<hex>` when the Memo program logged a Corridor-formatted string. `extractReference` strips the length prefix and returns the hex reference, or `null` if the transaction carries a different memo or none at all.
+
+```ts
+import { extractReference } from "@corridor/chain-solana";
+
+// From a getSignaturesForAddress response:
+const hex = extractReference(sig.memo ?? "");
+// hex: "0x02..." | null
+```
+
+The observer calls `recentReferencedTransfers` to scan the vault's recent transactions, filters to those with a valid Corridor memo, and emits `Observation` records into the reconciliation engine. Amount is resolved from the token balance deltas, not the memo.
+
+## Partner status lifecycle
+
+Every partner order — whether funded on Solana or Base — is normalised to the same four states. The Solana leg never depends on a provider-specific status string.
+
+| Normalised status | Meaning |
+|---|---|
+| `open` | Order created; funding address returned; waiting for USDC |
+| `processing` | Partner has seen the funds; local payout in progress |
+| `completed` | Local currency delivered to the beneficiary |
+| `failed` | Partner could not complete the payout |
+
+## Network configuration
+
+| Cluster | HTTP RPC | USDC mint |
+|---|---|---|
+| Mainnet | `api.mainnet-beta.solana.com` | `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` |
+| Devnet | `api.devnet.solana.com` | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` |
+
+USDC on Solana is an SPL Token (Token Program). The mint addresses above are the canonical Circle-issued USDC mints for each cluster.
+
+<Note>
+  Token-2022 mints use a different program address. The Corridor vault uses the standard SPL Token program (`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`) for both mainnet and devnet USDC.
+</Note>
+
+## Devnet evidence
+
+A real USDC transfer on Solana devnet, funding a partner order for a EUR → NGN payout, with the Corridor Reference visible in the Memo program logs:
+
+[`nDGHfRgM…`](https://explorer.solana.com/tx/nDGHfRgMgK1Xc8gjE3bqUvgfp5qP13HnP6nTtLQGBSqaLLtdDfg2nXYPEzbHfcwpYjv1xQFedMcRh3KkJyRZicH?cluster=devnet)
+
+<Tip>
+  When the devnet vault holds USDC, the runtime funds the partner with a real on-chain transfer. When it does not, it records a clearly marked simulated funding reference — a demo run never silently claims a transfer happened.
+</Tip>

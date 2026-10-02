@@ -1,0 +1,117 @@
+---
+title: "Automatic Three-Way Reconciliation Across Chains"
+sidebarTitle: "Reconciliation"
+description: "How Corridor's reconciliation engine matches on-chain observations from Tempo, Solana, Zcash, and partner webhooks against ledger bookings — automatically, with no spreadsheets."
+---
+
+A balanced ledger is not the same as a correct ledger. Every entry can balance perfectly while a movement on-chain went unbooked, or a partner webhook arrived but was never matched. Corridor runs reconciliation in both directions: every movement the chains recorded should be booked, and every vault's on-chain balance should match the books exactly. The result is a continuous, automatic match — not a month-end exercise.
+
+## Observers
+
+Three types of observer watch the venues Corridor operates on and emit a single `Observation` shape:
+
+```ts
+interface Observation {
+  venue:       Venue;
+  externalRef: string;
+  reference:   CorridorRef | null;
+  amount:      bigint;
+  asset:       Asset;
+  at:          Date;
+}
+```
+
+| Venue | Observer | `externalRef` format |
+|---|---|---|
+| Tempo | `TempoObserver` — filters `TransferWithMemo` logs in and out of vaults, plus Fee Manager transfers and plain inbound deposits | `${txHash}:${logIndex}` |
+| Partners | Signed webhooks stored once per order status | `${partner}:${orderId}` |
+| Zcash | Viewing-key scan of decrypted Ironwood outputs (vault wallet or auditor view-only wallet) | `${txid}:${pool}:${outputIndex}` |
+
+The Tempo observer resumes from a stored block cursor, so restarts neither miss nor double-count events. The Zcash observer works identically for the treasury wallet and for an auditor's imported viewing key — the matcher does not know or care which is running.
+
+## Matching
+
+The matcher joins observations with ledger expectations on the **Corridor Reference** and produces one of four outcomes per observation:
+
+```ts
+const results = await reconcile(ledger, observations);
+summarize(results);
+// → { matched, amount_mismatch, unbooked, unreferenced }
+```
+
+| Status | Meaning | What to do |
+|---|---|---|
+| `matched` | Observation found in the ledger with the same amount | Nothing — this is the normal case |
+| `amount_mismatch` | Booked, but the ledger amount differs from the chain | Investigate: wrong amount booked or a partial fill |
+| `unbooked` | Carries a Corridor Reference but nothing was booked | An own movement went unrecorded — investigate the saga |
+| `unreferenced` | No Corridor Reference and not in the ledger | An unidentified deposit — never credited automatically, held for review |
+
+<Note>
+`unreferenced` deposits are never credited to a customer automatically. A deposit sent without a valid Corridor Reference memo could be anyone's funds, and Corridor will not credit it without investigation.
+</Note>
+
+## Gas and funding booked from the chain
+
+Most movements are booked by the saga legs that make them. Two categories are picked up directly from the chain observer:
+
+<CardGroup cols={2}>
+  <Card title="Gas fees" icon="fuel">
+    Tempo charges each fee as a TIP-20 transfer from the payer to the Fee Manager (`0xfeec…0000`). The observer reports these transfers, and `bookVaultMovements` books each one to `expense:gas`, keyed by its log event — booked exactly once regardless of how many times the observer runs.
+  </Card>
+  <Card title="Funding deposits" icon="banknote">
+    Deposits from an approved funding source (testnet faucet mints from the zero address; owner wallets listed in `CORRIDOR_FUNDING_SOURCES` on mainnet) are booked to `equity:owner`. Movements are processed in chain order, so a top-up is booked before the fees it pays for.
+  </Card>
+</CardGroup>
+
+## Vault balance check
+
+After matching observations against the ledger, `checkVaults` compares each vault's live on-chain balance against the sum of its ledger postings:
+
+```ts
+const checks = await checkVaults(accounts, ledger, [{
+  name: "treasury",
+  address,
+  asset: "pathUSD",
+  venue: "tempo",
+  onchain,
+}]);
+// → { vault: "treasury", onchain, ledger, diff, status: "balanced" | "drift" }
+```
+
+The console replays each vault's whole history from its first funded block (found by bisecting historical balances) so the check covers every movement since inception. On Moderato testnet:
+
+| Treasury vault | Value |
+|---|---|
+| On-chain balance | 1,000,051.994555 pathUSD |
+| Ledger balance | 1,000,051.994555 pathUSD |
+| Difference | **0.000000 pathUSD** |
+| Gas booked | 10 transactions, 0.005445 pathUSD |
+| Reconciliation | **45 / 45 matched** (Tempo 30, partners 5, Zcash 10) |
+
+## The same engine for public and shielded lanes
+
+The reconciliation engine does not have a separate path for shielded payouts. The Zcash observer emits the same `Observation` shape as the Tempo and partner observers. The matcher joins on the same Corridor Reference, which travels in the encrypted Ironwood memo for shielded outputs and in the TIP-20 memo for public ones. Privacy is enforced at the viewing-key layer — only the vault owner and any auditor with an issued viewing key can run the Zcash observer.
+
+## Auditor disclosure
+
+Because the Zcash observer only requires a viewing key, an auditor can run it independently:
+
+1. Import the vault's unified full viewing key into a view-only wallet.
+2. Sync the wallet against the Zcash node.
+3. Run `reconcile()` against the ledger with the resulting observations.
+
+The viewing key reveals exactly one customer's vault for one period and cannot spend. The Treasury Console's Disclosures panel exports a scoped key with a description of what it covers and step-by-step verification instructions.
+
+## What this means for you
+
+<CardGroup cols={3}>
+  <Card title="No spreadsheet matching" icon="table-2">
+    Reconciliation runs continuously as observations arrive. You do not need to export ledger data and cross-reference it against bank statements or chain explorers.
+  </Card>
+  <Card title="Exceptions surfaced clearly" icon="triangle-alert">
+    Every unmatched or mismatched observation appears in the Treasury Console's reconciliation panel with its venue, external reference, amount, and status. Nothing is silently dropped.
+  </Card>
+  <Card title="Auditor-ready" icon="file-check">
+    The viewing-key disclosure model means auditors get a verifiable, tamper-proof record of every shielded payout for a given period without needing access to the full system.
+  </Card>
+</CardGroup>

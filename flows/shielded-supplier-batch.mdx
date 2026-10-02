@@ -1,0 +1,127 @@
+---
+title: "Shielded Supplier Batch: Private Payments via Zcash"
+sidebarTitle: "Shielded Batch"
+description: "Pay N suppliers privately in one Zcash Ironwood transaction, priced by NEAR Intents, funded from the Tempo hub, and approved by FROST 2-of-3 threshold signers."
+---
+
+An importer pays three suppliers and does not want competitors reading the amounts on a public chain. With Corridor's shielded lane, a single Zcash Ironwood transaction carries all three payments — each with an encrypted invoice memo — funded from the same Tempo hub balance as any other payout, and authorized only after two of three FROST signers approve. This page walks through the live testnet run on 29 September 2026: **$15 → 0.01022830 ZEC → 3 recipients, batch tx [ba4e845b…](https://testnet.zcashexplorer.app/transactions/ba4e845b81b7d6faf350fd01cf967d9d35d717d5bc3eb455eb48ee945b3c38c7), 31/31 cross-chain matched**.
+
+## When to use the shielded lane
+
+Use the shielded lane when supplier prices, volumes, or beneficiary identities should not be visible on a public chain. Common cases include:
+
+- **Import payments**: you don't want competitors to see which suppliers you use or what you pay them.
+- **B2B supplier batches**: a payroll or vendor run where amounts are commercially sensitive.
+- **Any payout where the recipient's Zcash address already holds shielded funds** you don't want correlated on-chain.
+
+The shielded lane is not a separate product. `privacy: "shielded"` is a single flag on the payout intent; the planner routes the final leg through the `zcash_ironwood` venue instead of `partner_fiat`. The same saga engine, ledger, and reconciliation engine handle both.
+
+## Run the demo
+
+```bash
+pnpm zcash:frost
+```
+
+## The route
+
+```
+# Testnet
+ledger.reserve → near.swap (USDC → ZEC) → zcash.shieldedBatch
+
+# Mainnet
+ledger.reserve → across.bridge (Tempo → Base) → near.swap (Base USDC → ZEC) → zcash.shieldedBatch
+```
+
+NEAR Intents has no Tempo market yet, so the swap runs on Base. On testnet the Across hop is simulated; the NEAR quote, ZEC delivery, and Zcash broadcast are all live.
+
+## Leg sequence
+
+<Steps>
+  <Step title="ledger.reserve — hold pathUSD">
+    15 pathUSD moves from the customer's (`acme-imports`) available balance to their hold account. The reserve step is identical to any other payout — the engine doesn't know yet which venue the payment will use.
+  </Step>
+  <Step title="near.swap — price and fund the FROST vault with ZEC">
+    The saga requests a live **NEAR Intents 1Click mainnet quote**: $15 → **0.01022830 ZEC** (~$1,466.52 per ZEC). The quote is stored in `leg_artifacts` before any funds move, so the same quote is used on retry.
+
+    A real Tempo transfer carries 15 pathUSD from the treasury vault to the swap escrow, with the batch's Corridor Reference in the `transferWithMemo` memo.
+
+    **Tempo leg:** [0xbafdbde3…](https://explore.testnet.tempo.xyz/tx/0xbafdbde30386b736fb7151df338ebacc395843575704303fe5e438c17bb760a5)
+
+    0.01022830 testnet ZEC is delivered straight to the FROST vault's unified address (a ZIP-32 account). The delivery is recorded in `leg_artifacts` so it is never sent twice on retry.
+
+    **ZEC delivery:** [1f05d641…](https://testnet.zcashexplorer.app/transactions/1f05d6415ad694bdc3ecffc06ef57eb9b859b2fbc1c5724601faf5bf806ee720)
+
+    The customer's pathUSD hold converts into a ZEC liability through the `usd-zec` clearing pair.
+  </Step>
+  <Step title="zcash.shieldedBatch — build the ZIP-321 payment request">
+    30,000 zatoshi are kept back for the ZIP-317 network fee. The remaining **0.00992830 ZEC** is split across three outputs by USD share. Each output carries an **encrypted ZIP-302 text memo** visible only to the recipient and any wallet holding the vault's viewing key:
+
+    | Recipient | Memo |
+    |---|---|
+    | Supplier 1 | `INV-2026-09-S01 / corridor:<ref>` |
+    | Supplier 2 | `INV-2026-09-S02 / corridor:<ref>` |
+    | Supplier 3 | `INV-2026-09-S03 / corridor:<ref>` |
+
+    The batch is built and proved as an unsigned **PCZT** (Partially Created Zcash Transaction) using `zcash-devtool` (librustzcash, Ironwood-aware).
+  </Step>
+  <Step title="FROST approval — 2-of-3 threshold">
+    The saga opens an approval request and waits. The FROST vault's spend-authorizing key `ak` is a FROST group key (RedPallas ciphersuite) — nobody holds the complete spending key.
+
+    Three signers hold shares: the customer approver, the customer finance lead, and Corridor. Any two of the three can authorize a spend.
+
+    In the console you see the approval request with status **1 of 2 required** after signer 1 approved. Signer 2 alone attempted to approve but was refused — below threshold. The saga remained paused.
+
+    <Warning>
+      A signer set below the threshold is cryptographically refused by `corridor-frost`, not just rejected by policy. The FROST aggregation step verifies the RedPallas signature against the group key and will not combine fewer shares than the threshold.
+    </Warning>
+  </Step>
+  <Step title="corridor-frost co-sign and broadcast">
+    Signer 3 approved. `corridor-frost` co-signed with exactly signers 1 and 3, ran FROST rounds 1 and 2 rerandomized by each Ironwood action's `alpha`, aggregated, verified the RedPallas signature against `rk`, and applied it with `Signer::apply_ironwood_signature`.
+
+    `zcash-devtool pczt combine` merged proofs and signatures; `pczt send` broadcast the transaction.
+
+    **Batch transaction:** [ba4e845b…](https://testnet.zcashexplorer.app/transactions/ba4e845b81b7d6faf350fd01cf967d9d35d717d5bc3eb455eb48ee945b3c38c7)
+  </Step>
+  <Step title="Zcash mining and viewing-key observation">
+    After the transaction is mined, the viewing-key scanner syncs against `testnet.zec.rocks`. Any wallet that holds the **vault viewing key** — including an auditor's view-only wallet — can see exactly the three outputs and their invoice memos.
+
+    The scanner emits one `Observation` per output into the reconciliation engine, each keyed by the encrypted memo's Corridor Reference.
+  </Step>
+  <Step title="recon — book and reconcile">
+    One double-entry ledger posting per recipient output, plus the actual 20,000-zatoshi fee booked to `expense:zcash-fees`. The viewing-key scanner's observations match every ledger expectation.
+
+    **Cross-chain result: 31/31 matched** (Tempo 17, partners 4, Zcash 10 across the full demo session).
+  </Step>
+</Steps>
+
+## What each party sees
+
+| Party | View |
+|---|---|
+| **The public** | A Tempo transfer to the swap venue and one shielded Zcash transaction. No recipients, no amounts, no invoice references. |
+| **Each supplier** | Their payment amount and their own invoice memo (`INV-2026-09-Sxx / corridor:<ref>`), readable in their own Zcash wallet. |
+| **The customer** | All outputs visible in the treasury console via the vault viewing key. Venue balance panel shows the ZEC liability nets to zero after the batch is mined. |
+| **The auditor** | With the exported vault viewing key scoped to `(acme-imports, 2026-09)`: exactly these three payouts for that period. No other treasury activity. |
+
+## Auditor disclosure
+
+Export the vault viewing key from the treasury console under **Disclosures**. The export is scoped to a customer and a period (a ZIP-32 account), so the auditor sees only the payments in that window — not the full treasury history.
+
+The console disclosure view shows:
+- The viewing key
+- What it reveals (customer, period, number of outputs)
+- How to import it into a Zcash wallet to verify independently
+
+<Tip>
+  The testnet vault viewing key from the demo run is published at the live demo: [udoka-am.github.io/corridor/console](https://udoka-am.github.io/corridor/console/). You can import it into any Ironwood-aware Zcash wallet and verify the three payments yourself.
+</Tip>
+
+## FROST in production
+
+The hackathon demo runs both FROST rounds in one process over separate share files (trusted-dealer keygen). In production:
+
+- DKG (Distributed Key Generation) replaces the trusted dealer — no single party ever sees the combined key.
+- Each signer runs on their own device and communicates through `frostd`.
+- The PCZT interface and the RedPallas cryptography are identical in both modes.
+
+The threshold is configurable per vault. A 2-of-3 arrangement is the default: customer approver, customer finance lead, and Corridor as the co-signer.

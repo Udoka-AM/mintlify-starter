@@ -1,0 +1,102 @@
+---
+title: "Settlement Assets: pathUSD, USDC, and the DEX"
+sidebarTitle: "Settlement Assets"
+description: "pathUSD is Corridor's canonical settlement unit on Tempo. Learn how it flows through the DEX, when USDC.e takes over, and what partners actually receive."
+---
+
+Corridor settles every dollar-denominated flow through a canonical on-chain asset called **pathUSD** — a TIP-20 stablecoin issued by Bridge (a Stripe company) and native to the Tempo network. Your ramp partners never see it: they receive USDC on Solana or Base. pathUSD is an internal settlement unit that stays inside Corridor's vaults from the moment money enters the hub until it leaves for a partner.
+
+## The settlement flow
+
+Every USD-denominated leg follows the same path through the network:
+
+```
+Ingress (any USD TIP-20)           Core (Tempo)                      Egress
+USDC.e / USDT0 / pathUSD ──DEX──▶  pathUSD vaults + ledger  ──Across──▶  Base USDC  ──Across──▶  Solana USDC  ──▶  ramp partner
+```
+
+Any USD TIP-20 that arrives at the hub is converted to pathUSD in a single atomic `dexSwap` transaction on Tempo's enshrined stablecoin DEX. After that, the pathUSD balance funds payouts. When a payout leaves the hub, Across bridges it — first to Base USDC, then to Solana USDC — before the ramp partner delivers local currency to the recipient.
+
+## Why pathUSD
+
+<CardGroup cols={2}>
+  <Card title="Built for this use case" icon="building">
+    Bridge issues pathUSD as Tempo's neutral quote token. Every USD TIP-20 routes through it on the enshrined DEX, so ingress conversion is one atomic transaction, not a multi-step swap.
+  </Card>
+  <Card title="Fee AMM native" icon="zap">
+    Tempo validators accept pathUSD as a fee token. Corridor vaults pay gas in the asset they already hold — no need to keep a separate ETH or native token balance.
+  </Card>
+  <Card title="Available on testnet" icon="flask-conical">
+    The Moderato faucet issues pathUSD directly, so development and the production demo run on the same asset. There is no test/production asset split to manage.
+  </Card>
+  <Card title="Live Across routes" icon="route">
+    Across supports `pathUSD (chain 4217) → USDC` on Base, Arbitrum, Ethereum, and others. Egress is a live bridge path, not a simulated hop.
+  </Card>
+</CardGroup>
+
+## Asset types
+
+| Asset | Kind | Where it sits | Decimals |
+|---|---|---|---|
+| `pathUSD` | TIP-20 stablecoin | Tempo vaults and ledger | 6 |
+| `USDC.e` | Stargate-bridged USDC | Tempo (ingress / fallback settlement) | 6 |
+| `USDC` | Native USDC | Solana and Base (partner egress) | 6 |
+| `USDT` | Tether USD | Accepted at ingress DEX | 6 |
+| `ZEC` | Zcash | Zcash Ironwood (shielded lane only) | 8 |
+| `NGN`, `KES`, `EUR`, … | Fiat | Partner rails (never on-chain) | 2 (varies) |
+
+In the core model these are typed as:
+
+```ts
+// packages/core/src/model.ts
+export const DIGITAL_ASSETS = {
+  pathUSD:  { decimals: 6, currency: "USD" },
+  "USDC.e": { decimals: 6, currency: "USD" },
+  USDC:     { decimals: 6, currency: "USD" },
+  USDT:     { decimals: 6, currency: "USD" },
+  ZEC:      { decimals: 8, currency: "ZEC" },
+} as const;
+export type DigitalAsset = keyof typeof DIGITAL_ASSETS;
+
+export type Asset = DigitalAsset | Fiat;
+```
+
+Every amount Corridor stores or transmits is an integer count of minor units with no floating-point arithmetic:
+
+```ts
+// packages/core/src/model.ts
+export interface Money {
+  asset:  Asset;
+  amount: bigint; // non-negative; direction lives on the posting
+}
+
+parseMoney("pathUSD", "1000.50")
+// → { asset: "pathUSD", amount: 1_000_500_000n }
+
+formatMoney({ asset: "pathUSD", amount: 1_000_000_000n })
+// → "1000 pathUSD"
+```
+
+## Per-corridor settlement policy
+
+Each corridor carries a `settlementAsset` policy field. The default is `pathUSD`, but because the ledger is multi-asset per venue and Across routes exist for both pathUSD and USDC.e, the fallback can be changed without a migration:
+
+<Note>
+pathUSD's circulating supply is in the single-digit millions of dollars as of mid-2026. If a ticket is larger than available pathUSD depth on Tempo's DEX, Corridor settles that corridor in `USDC.e` directly. Switching is a config change in the corridor's `settlementAsset` policy — the saga engine, ledger, and reconciliation continue to work unchanged.
+</Note>
+
+## What partners receive
+
+Partners are always paid in **USDC on Solana or Base** — never in pathUSD. The Across bridge handles the conversion on egress. Your integration with a ramp partner is denominated in USDC regardless of which settlement asset Corridor uses internally.
+
+The two-hop bridge path — Tempo → Base → Solana — means payouts arrive as standard USDC that any Solana or Base ramp partner already supports. Observed live fill times on mainnet: ~1 second Tempo → Base, ~8 seconds Base → Solana.
+
+## The shielded lane
+
+For shielded payouts, the settlement asset is `ZEC` on Zcash Ironwood. The flow diverges after the Tempo hub:
+
+```
+pathUSD vaults  ──NEAR Intents──▶  ZEC  ──Ironwood batch──▶  shielded recipient
+```
+
+NEAR Intents provides a live USDC → ZEC quote (mainnet), and the resulting ZEC is delivered straight to the FROST vault's unified address in a single shielded transaction. All bookings convert the customer's pathUSD hold into a ZEC liability through a `usd-zec` clearing pair in the double-entry ledger, and the actual fee is booked as `expense:zcash-fees` once the transaction mines. See [Hub-and-Spoke](/concepts/hub-and-spoke) for how the shielded lane fits the broader network.

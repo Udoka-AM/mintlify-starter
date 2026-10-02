@@ -1,0 +1,88 @@
+---
+title: "Base: Bridge Relay Between Tempo and Solana"
+sidebarTitle: "Base"
+description: "How Base fits into Corridor's routing: the intermediate hop in the two-leg Across bridge path and a direct payout venue for Africa-corridor partners."
+---
+
+Base is an Ethereum L2 operated by Coinbase. In Corridor's architecture, it plays two distinct roles: it is the mandatory intermediate stop in the two-hop Across bridge path from Tempo to Solana, and it is a direct payout venue for ramp partners that settle on Base rather than Solana.
+
+<Note>
+You do not need to configure anything Base-specific. The routing engine handles Base automatically as part of the bridge path. This page describes what happens under the hood so you can understand where funds are at each stage of a cross-chain flow.
+</Note>
+
+## Role 1: the bridge relay
+
+Across has no direct Tempo ↔ Solana route. Every Tempo-to-Solana movement therefore travels through Base USDC in two separate Across hops:
+
+```text
+Tempo (pathUSD / USDC.e)
+    │
+    │  Hop 1 — across.bridge(tempo → base)
+    ▼
+Base (USDC)    ◀── Corridor-owned relay wallet
+    │
+    │  Hop 2 — across.bridge(base → solana)
+    ▼
+Solana (USDC)
+    │
+    ▼
+Ramp partner payout
+```
+
+Between hops, funds sit in a **Corridor-owned relay wallet** on Base. They are never in an unowned address: the ledger always knows whether funds are on Tempo, in transit as a deposit, or sitting on Base waiting for the second hop.
+
+Each hop is its own saga leg. If the second hop fails after the first has settled, the saga compensates by bridging from Base back to Tempo. See [Across](/integrations/across) for details on the compensation model.
+
+## Role 2: direct payout venue
+
+Some ramp partners settle on Base USDC rather than Solana USDC. Paj, for example, pays NGN, GHS, KES, TZS, and ZAR from Base. For those corridors, the routing engine selects a **one-hop** path:
+
+```text
+ledger.reserve
+    │
+    │  across.bridge(tempo → base)
+    ▼
+Base USDC (Corridor relay wallet)
+    │
+    │  partner.payout(base → NGN / GHS / KES / TZS / ZAR)
+    ▼
+Ramp partner
+```
+
+This saves one Across hop and the associated fee and latency compared to routing through Solana. The route graph encodes a `partner.payout` edge from `base/USDC` for each currency in `BASE_PAYOUT_CURRENCIES`, and the planner's cheapest-path search picks the one-hop route automatically when it is available.
+
+<Tip>
+If you are building a payout flow into NGN, GHS, KES, TZS, or ZAR and your partner settles on Base, no extra configuration is needed. The planner selects the one-hop route. You only need the Solana two-hop path if your partner is Solana-native.
+</Tip>
+
+## Environments
+
+| Network | Chain ID | USDC address |
+|---|---|---|
+| Base mainnet | `8453` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| Base Sepolia (testnet) | `84532` | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+
+These addresses are exported by `@corridor/bridge-across`:
+
+```ts
+import { CHAINS, TOKENS } from "@corridor/bridge-across";
+
+CHAINS.base           // 8453
+CHAINS.baseSepolia    // 84532
+TOKENS.baseUSDC       // "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+TOKENS.baseSepoliaUSDC // "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+```
+
+## What the ledger tracks
+
+The double-entry ledger records a separate entry for each hop, so at any point in time you can see exactly where funds are:
+
+| State | Ledger entry |
+|---|---|
+| Reserved on Tempo | `vault:tempo:pathUSD → clearing:bridge` |
+| Deposit submitted (hop 1) | Deposit hash recorded; leg status `in_flight` |
+| Settled on Base relay wallet | `clearing:bridge → relay:base:USDC` |
+| Deposit submitted (hop 2) | Deposit hash recorded; leg status `in_flight` |
+| Settled on Solana / with partner | `relay:base:USDC → partner_fiat` |
+
+If a hop fails and the saga compensates, each compensation step posts a reversal entry so the ledger balance is always correct and the movement is auditable end-to-end.

@@ -1,0 +1,144 @@
+---
+title: "Partner Interface: Normalised Ramp Partner API"
+sidebarTitle: "Partner Interface"
+description: "Six methods, one order lifecycle, and a signed webhook contract that lets any payout or collection provider become a Corridor spoke without changing the routing engine."
+---
+
+A ramp partner is a spoke. Implement the `RampPartner` interface once and every customer on Corridor can collect from or pay out to your currencies — and every other region can reach them through the hub. The routing engine, saga, ledger, and reconciliation engine never depend on a specific provider's API.
+
+## The interface
+
+```ts
+interface RampPartner {
+  readonly id: string;
+  readonly payoutCurrencies: readonly Fiat[];
+  readonly collectionCurrencies: readonly Fiat[];
+  readonly chains: readonly ("SOLANA" | "BASE")[];
+
+  rates(currency: Fiat): Promise<Rates>;
+  openPayout(req: PayoutRequest): Promise<PartnerOrder>;          // offramp
+  openCollection(req: CollectionRequest): Promise<PartnerOrder>;  // onramp
+  getOrder(id: string): Promise<PartnerOrder>;
+
+  verifyWebhook(
+    rawBody: string,
+    headers: Record<string, string | undefined>,
+    now?: Date
+  ): boolean;
+  parseWebhook(rawBody: string): PartnerOrder;
+}
+```
+
+`id` is a stable lowercase string used as a routing key and in ledger entries. `payoutCurrencies` and `collectionCurrencies` declare which ISO 4217 currency codes the partner supports in each direction. `chains` lists the settlement networks the partner accepts USDC on.
+
+## The order lifecycle
+
+Every provider is normalised to one lifecycle. Corridor's saga legs and reconciliation engine only ever see these four states:
+
+```
+open → processing → completed
+                 ↘ failed
+```
+
+<ResponseField name="PartnerOrder" type="object">
+  <Expandable title="fields">
+    <ResponseField name="id" type="string">The partner's order ID.</ResponseField>
+    <ResponseField name="kind" type="'payout' | 'collection'">Offramp or onramp.</ResponseField>
+    <ResponseField name="status" type="'open' | 'processing' | 'completed' | 'failed'">Normalised status.</ResponseField>
+    <ResponseField name="partnerStatus" type="string">The partner's own raw status string, kept for audit.</ResponseField>
+    <ResponseField name="chain" type="'SOLANA' | 'BASE'">Settlement chain for this order.</ResponseField>
+    <ResponseField name="currency" type="Fiat">ISO 4217 local currency code.</ResponseField>
+    <ResponseField name="usdcAmount" type="bigint">USDC in base units (6 decimal places).</ResponseField>
+    <ResponseField name="fiatAmount" type="bigint">Local currency in minor units.</ResponseField>
+    <ResponseField name="rate" type="number">Local currency per USD at pricing time.</ResponseField>
+    <ResponseField name="fundingAddress" type="string">Payout only: where to send USDC. One-off; valid for this order only.</ResponseField>
+    <ResponseField name="virtualAccount" type="object">Collection only: the bank account the payer sends local currency to.</ResponseField>
+    <ResponseField name="txSignature" type="string">On-chain signature of the partner's leg, when known.</ResponseField>
+    <ResponseField name="reference" type="Hex">The 32-byte Corridor Reference echoed back from the partner's free-text field.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Requirements for a new partner
+
+<Steps>
+  <Step title="Settle in USDC on Solana or Base">
+    Corridor funds payouts and receives collections in USDC on the chain declared in `chains`. You do not need to support both; many partners support only one.
+  </Step>
+  <Step title="Issue one-off addresses">
+    Return a fresh funding address per payout order and a fresh virtual bank account per collection. This one-to-one mapping is what lets Corridor tie every on-chain movement to exactly one order.
+  </Step>
+  <Step title="Echo the Corridor Reference">
+    Accept a 32-byte reference in a free-text field (`description`, `userExternalId`, or equivalent) and return it unchanged on webhook deliveries and in `getOrder` responses.
+  </Step>
+  <Step title="Sign webhooks">
+    Use HMAC-SHA256 over `{timestamp}.{rawBody}` with a `v1=` prefix, verified in constant time within a 5-minute window. This is Paj's scheme; Corridor uses the same one for its own outbound webhooks.
+  </Step>
+</Steps>
+
+## Webhook ingest
+
+Corridor receives partner status updates at `POST /webhooks/:partner`. The handler:
+
+1. Looks up the partner by the `:partner` path segment.
+2. Calls `partner.verifyWebhook(rawBody, headers)` in constant time. A signature mismatch returns `401`.
+3. Stores the order status update exactly once — redeliveries of the same event are acknowledged with `200` and discarded.
+4. Converts a `completed` order into an `Observation` (`venue: "partner_fiat"`, `externalRef: "${partner}:${orderId}"`) and hands it to the reconciliation engine.
+
+```ts
+// Webhook verification uses constant-time comparison:
+import { verifyWebhookSignature } from "@corridor/partners";
+
+const valid = verifyWebhookSignature(
+  webhookSecret,
+  rawBody,
+  req.headers["x-paj-timestamp"],
+  req.headers["x-paj-signature"],
+);
+```
+
+<Warning>
+  Never acknowledge a webhook before verifying its signature. A `200` response before verification would allow a forged event to mark an order as completed.
+</Warning>
+
+## Partner registry
+
+`PartnerRegistry` picks the right partner for each (currency, direction, chain) combination at runtime. The first registered partner that covers the currency and chain wins.
+
+```ts
+import { PartnerRegistry, PajPartner } from "@corridor/partners";
+
+const registry = new PartnerRegistry();
+registry.register(new PajPartner({ apiKey: process.env.PAJ_API_KEY! }));
+
+// Route a NGN payout on Solana:
+const partner = registry.forPayout("NGN", "SOLANA");
+
+// Route a NGN collection on Base:
+const partner = registry.forCollection("NGN", "BASE");
+```
+
+Adding a new partner means implementing `RampPartner` and calling `registry.register(...)`. No changes to the routing engine, saga, or reconciliation engine are needed.
+
+## Exactly-once funding and failure handling
+
+The payout leg records the partner order and the funding transaction durably before any external call. If the process crashes or the saga retries, it reuses the existing records.
+
+| Failure point | Behaviour |
+|---|---|
+| Before partner order is created | Retry creates a new order |
+| After order, before funding tx | Retry finds the existing order and sends the funding transfer |
+| After funding tx, before `completed` webhook | Polling via `getOrder`; saga waits |
+| Partner returns error after USDC sent | Saga stops at `manual_review`; no compensation |
+
+## Current and candidate partners
+
+| Region | Partners |
+|---|---|
+| Africa | Paj (NGN / Solana / Base), FossaPay (NGN), Yellow Card (multi-Africa), Kotani Pay (KES), Bitnob, HoneyCoin, Busha |
+| China, Hong Kong, Asia | Licensed HK payment institutions, Nium, Conduit |
+| Americas | Bridge, Bitso Business, Pix partners, Conduit |
+| Global aggregators | BVNK, Conduit, Nium |
+
+<Tip>
+  Each new partner makes every existing spoke reachable from its currencies. A KES partner added today immediately enables NGN → KES flows through the existing Paj NGN collection leg.
+</Tip>

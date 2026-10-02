@@ -1,0 +1,155 @@
+---
+title: "Across Bridge: Tempo to Base to Solana"
+sidebarTitle: "Across"
+description: "How Corridor uses Across to move USDC from Tempo through Base to Solana in two saga legs, with live quotes, fill tracking, and per-leg compensation."
+---
+
+Across moves value between Corridor's Tempo settlement hub and its spoke chains. Because there is no direct Tempo ↔ Solana route in Across, every hub-to-Solana movement goes in **two hops through Base**, each hop a separate saga leg with its own compensation. Corridor uses the Across **Swap API**, which returns ready-to-sign calldata, and tracks each deposit until a relayer fills it on the destination chain.
+
+<Note>
+**Build status.** The Across adapter (`@corridor/bridge-across`) — quote, execute, deposit status, fill tracking — is built and has run against the live Across API. The mainnet `across.bridge` saga leg that wraps it is next on the roadmap. Testnet flows use `bridge.simulated`, which has the same interface: the Tempo side is real (pathUSD moves to escrow with the reference as memo) and the far-side fill is simulated.
+</Note>
+
+## Why two hops
+
+Across has no direct Tempo ↔ Solana route. Corridor solves this with a two-hop path through Base USDC:
+
+```text
+Tempo (pathUSD / USDC.e)
+    │
+    │  Hop 1 — Across bridge
+    ▼
+Base (USDC)                ◀── funds sit in a Corridor-owned relay wallet here
+    │
+    │  Hop 2 — Across bridge
+    ▼
+Solana (USDC)
+    │
+    ▼
+Ramp partner (NGN, KES, GHS …)
+```
+
+Partners that settle on Base — such as Paj for NGN, GHS, KES, TZS, and ZAR — are paid after **one hop** (Tempo → Base → partner), skipping the Solana leg entirely. See [Base](/integrations/base) for details.
+
+## Live quote data
+
+Quotes were verified live on 29 September 2026:
+
+| Leg | Input | Expected output | Fill time | Fee |
+|---|---|---|---|---|
+| Tempo USDC.e → Base USDC | 5 USDC | ~4.996 USDC | ~1 s | ≈ $0.004 |
+| Base USDC → Solana USDC | 5 USDC | ~4.9994 USDC | ~8 s | ≈ $0.0006 |
+
+## Supported routes
+
+Across routes verified for Corridor:
+
+| Origin | Origin chain | Destination | Destination chain |
+|---|---|---|---|
+| pathUSD | Tempo (`4217`) | USDC | Base (`8453`) |
+| USDC.e | Tempo (`4217`) | USDC | Base (`8453`) |
+| USDC | Base (`8453`) | USDC | Solana |
+| pathUSD | Tempo (`4217`) | USDC | Arbitrum, Ethereum, and others |
+
+## API environments
+
+| Environment | Base URL |
+|---|---|
+| Mainnet | `https://app.across.to/api` |
+| Testnet | `https://testnet.across.to/api` |
+
+## Quoting, executing, and tracking a fill
+
+The full cycle for one Across hop is three steps:
+
+<Steps>
+  <Step title="Get a quote">
+    `GET /swap/approval` returns approval transactions (if a token allowance is needed), the deposit transaction calldata, expected output, and fill time. All amounts are in the input token's base units.
+
+    ```ts
+    import { quote, CHAINS, TOKENS } from "@corridor/bridge-across";
+
+    const q = await quote({
+      env: "mainnet",
+      originChainId: CHAINS.tempo,          // 4217
+      destinationChainId: CHAINS.base,      // 8453
+      inputToken: TOKENS.tempoPathUSD,
+      outputToken: TOKENS.baseUSDC,
+      amount: 5_000_000n,                   // 5 USDC (6 decimals)
+      depositor: vaultAddress,
+      recipient: relayWallet,
+    });
+    // q.expectedOutputAmount: 4_995_813n
+    // q.expectedFillTime: 1 (seconds)
+    // q.feeTotal: 4_187n
+    ```
+  </Step>
+  <Step title="Execute the deposit">
+    `executeEvm` sends any approval transactions first, then the deposit. It returns the deposit transaction hash once the deposit is confirmed on the origin chain.
+
+    ```ts
+    import { executeEvm } from "@corridor/bridge-across";
+
+    const { depositTxHash, approvals } = await executeEvm(tempoClient, q);
+    ```
+  </Step>
+  <Step title="Wait for the fill">
+    Poll `GET /deposit/status` until the status is `filled` (with `fillTx`), `expired`, or `refunded`. `waitForFill` handles polling with a configurable deadline and callback.
+
+    ```ts
+    import { waitForFill } from "@corridor/bridge-across";
+
+    const status = await waitForFill("mainnet", CHAINS.tempo, depositTxHash, {
+      timeoutMs: 10 * 60_000,
+      pollMs: 5_000,
+      onPoll: (s) => console.log("fill status:", s.status),
+    });
+    // status.status: "filled"
+    // status.fillTx: "0x..."
+    ```
+  </Step>
+</Steps>
+
+<Note>
+CCTP-backed routes return `quoteExpiryTimestamp: 0`. The adapter treats zero as "no expiry" rather than "already expired," so you can safely send these deposits without racing against a timestamp.
+</Note>
+
+## Compensation design
+
+Each hop is its own saga leg, so if the second hop fails after the first has filled, the saga compensates the first by bridging back from Base to Tempo. Because each hop books a separate ledger entry, the ledger always reflects where the money is: on Tempo, on Base, or in-flight with a deposit hash.
+
+| Hop | Leg | Compensation |
+|---|---|---|
+| Hop 1 | `across.bridge(tempo → base)` | Bridge back from Base to Tempo |
+| Hop 2 | `across.bridge(base → solana)` | Bridge back from Solana to Base |
+
+The saga engine runs compensation in reverse order. A failure at hop 2 triggers hop 2's compensation only; a failure at hop 1 (before hop 2 has started) bridges the funds back to Tempo directly.
+
+## Testnet note
+
+<Warning>
+Across has no Tempo testnet deployment. The live Across bridge runs on mainnet. To test the two-hop flow, Corridor uses micro-amounts ($5–20) on mainnet, or switches to the `bridge.simulated` adapter in testnet environments.
+
+The simulated adapter has the same interface as the live adapter: `quote`, `executeEvm`, and `waitForFill` all work identically. The Tempo side is real — pathUSD moves to an escrow address with the Corridor Reference as its memo — and the far-side fill is simulated locally.
+</Warning>
+
+A live Across testnet deposit from Base Sepolia to Solana devnet ([`0x782d8b52…`](https://sepolia.basescan.org/tx/0x782d8b52d1278892e5215a7a72bf731fa0e205a9274f38f99e0bcb9992c76e02)) burned USDC and completed Circle's CCTP v2 attestation. The final Solana mint is restricted to Across's designated `destinationCaller` (its testnet relayer); on mainnet, the same adapter code runs without that restriction.
+
+## Token and chain constants
+
+The adapter exports all chain IDs and token addresses used by Corridor:
+
+```ts
+import { CHAINS, TOKENS } from "@corridor/bridge-across";
+
+// Chain IDs
+CHAINS.tempo          // 4217
+CHAINS.base           // 8453
+CHAINS.baseSepolia    // 84532
+
+// Token addresses
+TOKENS.tempoPathUSD   // "0x20c0000000000000000000000000000000000000"
+TOKENS.tempoUSDCe     // "0x20C000000000000000000000b9537d11c60E8b50"
+TOKENS.baseUSDC       // "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+TOKENS.solanaUSDC     // "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+```

@@ -1,0 +1,47 @@
+---
+title: "The Cross-Border Payment Problem in Africa"
+sidebarTitle: "The Problem"
+description: "Four structural costs your business pays on every African corridor — trapped capital, slow banks, expensive rails, and manual reconciliation — and how Corridor removes them."
+---
+
+If you operate a remittance service, a payout platform, or a licensed payment company serving African corridors, you are not just paying a transaction fee. You are absorbing four compounding costs on every payment you send or receive — and each one quietly erodes your margin and your operations capacity.
+
+## 1. Capital locked up in pre-funded accounts
+
+To pay out instantly in Lagos, Nairobi, or Accra, you keep a funded local bank account — a nostro — in each country, sized for your busiest days. That capital earns little, sits exposed to local-currency devaluation, and multiplies with every corridor you add. Serve ten markets and you are running ten idle float pools simultaneously. Importers face the same problem in reverse, holding balances in every supplier country.
+
+<Card title="How Corridor solves this" icon="circle-check">
+  One stablecoin balance on the Tempo hub funds every corridor. Payout partners receive funds per payment, just in time, and a 7-day pre-funding forecast in the treasury console tells you exactly when to top up — nothing more, nothing less.
+</Card>
+
+## 2. Settlement delayed by correspondent chains
+
+A cross-border wire passes through a chain of correspondent banks, each adding cut-off windows, compliance checks, and a day of float. T+1 to T+3 is the normal range, but missing a Thursday cut-off can push your payment to Tuesday. While funds are in transit, neither you nor the recipient can use them, and you have no reliable visibility into where in the chain the money sits.
+
+<Card title="How Corridor solves this" icon="circle-check">
+  Settlement on Tempo reaches finality in approximately 0.6 seconds. The only remaining variable is the local payout rail — a bank transfer or mobile money disbursement — which your partner runs in minutes, not days.
+</Card>
+
+## 3. The most expensive rails on earth
+
+African corridors are not just slow — they are the costliest in the world. According to World Bank Remittance Prices Worldwide data for Q1 2025, sending $200 to Sub-Saharan Africa averaged close to **9%** in fees and spread. That sits well above the **6.49% global average** and more than three times the **3% SDG target** the G20 endorsed. Every basis point of that gap is margin your customers cannot see and cannot negotiate away.
+
+<Card title="How Corridor solves this" icon="circle-check">
+  Corridor's all-in take is approximately 0.30% of settled volume — a fraction of the correspondent-bank equivalent. Settlement costs fractions of a cent per transfer on Tempo, and bridge hops across chains cost fractions of a cent, so the fee is margin, not pass-through.
+</Card>
+
+## 4. Reconciliation done by hand
+
+A single payout touches at least three systems: your internal ledger, a bank or on-chain transfer, and a payout partner. Matching those three records is still largely done with bank statements and spreadsheets — and discrepancies surface days after the fact, long after your ops team has moved on to the next batch.
+
+<Card title="How Corridor solves this" icon="circle-check">
+  A 32-byte Corridor Reference rides in every chain's native memo field and in every partner's free-text field. That single reference links your chain logs, partner webhooks, and ledger entries automatically — no manual matching required.
+</Card>
+
+## Imports add a fifth layer of friction
+
+Africa's trade with the world reached **$1.5 trillion in 2024** (Afreximbank, *African Trade Report 2025*). Every import is a payment out of the continent, and importers carry all four costs above — plus a competitive-intelligence risk: on a public chain, any observer can read exactly what you pay each supplier, and how often. Corridor's shielded lane settles supplier payments through Zcash's shielded pool, keeping amounts and counterparties private from the public while remaining open to your auditors through scoped viewing keys.
+
+<Note>
+  Corridor is infrastructure for licensed operators. Your business holds the money-transmission licences and owns the KYC and KYB relationships with your end customers. Corridor moves and reconciles your treasury.
+</Note>

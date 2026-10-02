@@ -1,0 +1,126 @@
+---
+title: "Treasury Console: Balances, Forecasts, and Recon"
+sidebarTitle: "Treasury Console"
+description: "A tour of the Treasury Console: what each panel shows, how to run live flows, manage shielded batches with FROST approvals, and export auditor disclosures."
+---
+
+The Treasury Console is the single place where you see everything happening across Corridor's settlement network — hub balances, in-flight payouts, partner settlements, reconciliation status, and the shielded lane — with explorer links to every on-chain step. A public, read-only replay is available at [udoka-am.github.io/corridor/console](https://udoka-am.github.io/corridor/console/).
+
+## KPIs at a glance
+
+The top of the console shows the metrics that matter most for treasury operations:
+
+| Metric | What it tells you |
+|---|---|
+| Hub balances | pathUSD available across all customer accounts on Tempo |
+| In-flight | Total value locked in active sagas awaiting settlement |
+| Settled via partners | Cumulative value delivered to recipients since last reset |
+| Saga outcomes | Completed / compensated / manual review counts |
+| Reconciliation rate | Percentage of observations matched to ledger bookings |
+
+## Settlement network map
+
+The network panel renders the hub-and-spoke topology with live planned routes. Each corridor shows the legs the planner has resolved for the current environment — so you can see at a glance whether a payout will go Tempo → Base → Paj or Tempo → Base → Solana → partner, and whether the bridge is using Across mainnet or the simulated testnet adapter.
+
+## Running live flows
+
+The **Run a flow** panel lets you trigger settlement scenarios directly from the console:
+
+<CardGroup cols={2}>
+  <Card title="EUR → NGN payout" icon="arrow-right">
+    A standard inbound remittance. Funds leave the Tempo hub, cross the Across bridge, and arrive at the Paj partner for naira delivery.
+  </Card>
+  <Card title="Payout with forced partner failure" icon="circle-x">
+    Injects a failure at the partner step. Watch the saga compensate in reverse order: the partner booking is reversed, the bridge is unwound, and a real on-chain Tempo refund is issued.
+  </Card>
+  <Card title="Importer NGN → CNY" icon="arrow-left-right">
+    An outbound import payment. NGN collected from the importer flows through the hub and is paid out to a supplier in the destination currency.
+  </Card>
+  <Card title="Pay 3 suppliers privately" icon="eye-off">
+    A shielded batch. Funds leave Tempo, are swapped to ZEC via NEAR Intents, and are delivered as a single Ironwood transaction requiring FROST 2-of-3 approval.
+  </Card>
+</CardGroup>
+
+## Settlement timeline
+
+Every saga appears in the timeline with its full step history: leg kind, status, attempt count, FX rate applied, and — for every on-chain step — a direct link to the transaction in the relevant block explorer (Tempo, Solana, or Zcash). You can trace a payment from the initial ledger reservation through every bridge hop to the final partner confirmation in one view.
+
+## Corridor board
+
+The corridor board shows available and held balances for each customer across each corridor. **Available** is the customer's pathUSD balance on the hub ready for new payouts; **held** is the amount reserved by sagas currently in flight.
+
+## Pre-funding forecast
+
+The forecast panel projects the next 7 days of outflows per customer based on recent settlement volume. It shows:
+
+- **Daily outflow** — average daily spend per corridor
+- **Runway in days** — how long the current hub balance lasts at that rate
+- **7-day top-up** — the amount to add today to cover projected needs
+
+Use this to schedule funding deposits before your balance runs low, rather than topping up reactively when a saga fails for insufficient funds.
+
+## Venue balances
+
+The venue balances panel breaks down every balance by where it sits:
+
+| Venue | What you see |
+|---|---|
+| Tempo | Treasury vault balance in pathUSD |
+| Solana | Egress and ingress wallet balances in USDC |
+| Partners | Funds in transit at each ramp partner |
+| Zcash | Shielded vault balance in ZEC (visible only to the vault owner) |
+| Clearing accounts | pathUSD ↔ USDC and USD ↔ ZEC pairs — these net to zero across completed flows |
+
+<Note>
+Clearing accounts always net to zero once the flows that created them have settled. A non-zero clearing balance indicates an in-flight conversion.
+</Note>
+
+## Cross-chain reconciliation
+
+The reconciliation panel shows the current match status across all three observation sources — Tempo log events, partner webhooks, and Zcash viewing-key scans — alongside the vault balance check:
+
+- **Matched / mismatch / unbooked / unreferenced** counts with drill-down per observation
+- **Vault check**: live on-chain balance vs. ledger balance, with the difference and gas booked
+- **Booked gas**: every Fee Manager transfer recorded to `expense:gas`
+
+In the live demo on Moderato: **45 / 45 matched** (Tempo 30, partners 5, Zcash 10), vault difference **0.000000 pathUSD**.
+
+## Shielded lane
+
+The shielded lane panel covers the full lifecycle of a Zcash Ironwood batch:
+
+<Steps>
+  <Step title="FROST vault status">
+    The panel shows the 2-of-3 FROST vault configuration — which signers are the customer approver, customer finance lead, and Corridor — and the current signing threshold.
+  </Step>
+  <Step title="Pending batches">
+    Each batch shows its recipients, USD and ZEC totals, encrypted invoice references, and how many signers have approved so far.
+  </Step>
+  <Step title="Approval workflow">
+    One button per signer. Once the threshold is met (any 2 of 3), `corridor-frost` co-signs with exactly those signers and the saga resumes: the PCZT is combined, broadcast, and the batch moves to settled.
+  </Step>
+  <Step title="Per-batch status">
+    After broadcast, the batch shows its Zcash transaction ID with an explorer link, the actual fee booked to `expense:zcash-fees`, and the reconciliation status of each output against the ledger.
+  </Step>
+</Steps>
+
+## Auditor disclosure export
+
+The Disclosures panel lets you generate a scoped viewing key for an auditor:
+
+1. Select the customer and the period (e.g., October 2026).
+2. The console exports the vault's unified full viewing key for that account, along with a description of exactly what it reveals and step-by-step instructions for independent verification.
+3. The auditor imports the key into a view-only wallet, syncs against the Zcash node, and can verify every shielded payout for that period against the ledger — without access to any other customer's data or any ability to spend.
+
+<Warning>
+The local console is unauthenticated by design for the demo. Action, approval, and disclosure endpoints must sit behind authentication and role-based access controls before any hosted deployment.
+</Warning>
+
+## Public replay
+
+The live demo at [udoka-am.github.io/corridor/console](https://udoka-am.github.io/corridor/console/) is a read-only replay recorded from live testnet runs:
+
+- Data comes from recorded JSON — no action moves real funds.
+- Each flow button opens the recorded run with its actual explorer links.
+- The disclosure button exports the real testnet viewing key so anyone can independently verify the shielded payouts.
+- The snapshot that produces this replay **refuses to publish** if any value from `.env.local` or `.keys/` appears in the recorded data.

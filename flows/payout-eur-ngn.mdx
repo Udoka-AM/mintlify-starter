@@ -1,0 +1,129 @@
+---
+title: "EUR to NGN Payout: End-to-End Flow Walkthrough"
+sidebarTitle: "EUR → NGN"
+description: "Walk through every leg of a €1,000 EUR to NGN payout — reserve, settle on Tempo, bridge to Solana, fund the partner, and reconcile in seconds."
+---
+
+A European payment company wants to settle €1,000 to a Nigerian bank account. With Corridor, the customer's pathUSD balance on the Tempo hub moves through a chain of saga legs — reserve, on-chain settlement, two Across bridge hops, a partner payout, and a three-way reconciliation — in a matter of seconds. This page walks you through every step, exactly as it ran on Tempo Moderato testnet on 29 September 2026.
+
+## Run the demo
+
+```bash
+pnpm payout:demo
+```
+
+The demo script runs a live EUR→NGN payout using a Paj-shaped mock for the fiat leg (see the note at the bottom of this page for production requirements). Every Tempo and Solana transaction is real and links to a block explorer.
+
+## What happens end to end
+
+The saga moves value across five legs, each with its own forward action and compensation. If any leg fails, the engine reverses every completed step in reverse order.
+
+<Steps>
+  <Step title="ledger.reserve — hold pathUSD in the vault">
+    Before a single byte hits the wire, the saga moves the payout amount from the customer's available balance into a hold. Nothing else can spend it while the payout is in flight.
+
+    | Account | Debit | Credit |
+    |---|---|---|
+    | `customer:eu-payco-demo:EUR-NGN:pathUSD:tempo` (available) | 2 pathUSD | |
+    | `customer_hold:eu-payco-demo:EUR-NGN:pathUSD:tempo` | | 2 pathUSD |
+  </Step>
+  <Step title="tempo.transfer — settle out of the treasury vault">
+    pathUSD leaves the treasury vault with the 32-byte Corridor Reference encoded as a `transferWithMemo` memo. The reference is an indexed topic on the `TransferWithMemo` event, so the observer finds it with a log filter — no indexer needed.
+
+    Two entries book both sides of the bridge through the `usd-peg` clearing pair: the Tempo leg is keyed by the deposit log; the fill leg is keyed by the cross-chain fill event.
+
+    | Account | Debit | Credit |
+    |---|---|---|
+    | `clearing:usd-peg:pathUSD:tempo` | 2 pathUSD | |
+    | `vault:treasury:pathUSD:tempo` | | 2 pathUSD |
+
+    **Live explorer:** [0x43e7f0ba…](https://explore.testnet.tempo.xyz/tx/0x43e7f0bac5488ac23adc9120c988f310f27b4f5ca17dca5bdc0497f8c2109e52)
+  </Step>
+  <Step title="across.bridge (Tempo → Base) — first bridge hop">
+    Across bridges USDC.e / pathUSD from Tempo (chain 4217) to Base USDC. The Across Swap API returns signed calldata; the saga deposits, then polls for the fill event. Verified live quote: **5 USDC in, fill ~1 second, fee ≈ $0.004**.
+
+    <Note>
+      Across supports Tempo mainnet directly (chain ID 4217) but has no Tempo testnet environment. The demo uses the `simulated` adapter on testnet; the mainnet path is live with micro-amounts.
+    </Note>
+  </Step>
+  <Step title="across.bridge (Base → Solana) — second bridge hop">
+    Base USDC bridges to Solana USDC in a second Across hop. Verified live quote: **fill ~8 seconds, fee ≈ $0.0006**. Across does not yet support destination swaps into Solana in one call, so the saga keeps these as two independent legs — each with its own compensation — with a Corridor-owned address on Base holding funds between hops.
+  </Step>
+  <Step title="partner.payout — fund the partner, pay NGN to the bank">
+    `openPayout` creates a one-off USDC funding address (valid for two hours) on Solana. USDC moves from the Solana egress vault to that address in a single transaction that also embeds `corridor:<ref>` as an SPL Memo instruction — the same 32-byte reference, readable on-chain.
+
+    The partner (Paj) receives the USDC and pays ₦3,060 to the beneficiary's bank account. A signed HMAC-SHA256 webhook confirms completion.
+
+    **Live Solana explorer:** [nDGHfRgM…](https://explorer.solana.com/tx/nDGHfRgMgK1Xc8gjE3bqUvgfp5qP13HnP6nTtLQGBSqaLLtdDfg2nXYPEzbHfcwpYjv1xQFedMcRh3KkJyRZicH?cluster=devnet)
+
+    | Account | Debit | Credit |
+    |---|---|---|
+    | `customer_hold:eu-payco-demo:EUR-NGN:pathUSD:tempo` | 2 pathUSD | |
+    | `clearing:usd-peg:pathUSD:tempo` | | 2 pathUSD |
+    | `clearing:usd-peg:USDC:solana` | 2 USDC | |
+    | `vault:solana-egress:USDC:solana` | | 2 USDC |
+
+    Both sides of the `usd-peg` clearing pair return to zero.
+  </Step>
+  <Step title="recon — three-way reconciliation">
+    The Tempo observer (log filter by memo topic), the Solana memo observer, and the partner webhook each emit an `Observation`. The reconciliation engine joins them with the ledger entries on the shared Corridor Reference and marks each one `matched`.
+
+    **Demo result: 5/5 matched.**
+  </Step>
+</Steps>
+
+## Settlement timeline
+
+| Leg | Timing |
+|---|---|
+| `ledger.reserve` | Instant (Postgres write) |
+| `tempo.transfer` | Tempo finality ~0.6 s |
+| `across.bridge` (Tempo → Base) | Fill ~1 s |
+| `across.bridge` (Base → Solana) | Fill ~8 s |
+| `partner.payout` (fiat delivery) | Minutes (bank transfer) |
+| `recon` | Immediate on webhook receipt |
+
+## What you see in the treasury console
+
+After running `pnpm payout:demo`, open the console at `http://localhost:4400`. You will see:
+
+<CardGroup cols={2}>
+  <Card title="Hub balance change" icon="wallet">
+    The customer's pathUSD available balance decreases by the payout amount. The hold account shows the in-flight balance until the partner confirms.
+  </Card>
+  <Card title="Settlement timeline" icon="clock">
+    Each saga leg appears in sequence with its status, timestamp, and a direct link to the Tempo or Solana block explorer for on-chain legs.
+  </Card>
+  <Card title="Recon status" icon="check">
+    The reconciliation panel shows 5/5 matched — one observation per leg, all joined on the Corridor Reference.
+  </Card>
+  <Card title="Clearing nets to zero" icon="scale-balanced">
+    The `usd-peg` clearing pair opens and closes within the same saga. The venue balance panel confirms it returns to zero after settlement.
+  </Card>
+</CardGroup>
+
+## Net effect
+
+| Account | Change |
+|---|---|
+| Customer available balance | −2 pathUSD |
+| Treasury vault on Tempo | −2 pathUSD (settled out of the hub) |
+| `usd-peg` clearing pair | 0 (nets to zero) |
+| Beneficiary bank account | +₦3,060 |
+
+## Mainnet vs testnet route
+
+| Environment | Route |
+|---|---|
+| **Testnet (recorded)** | `ledger.reserve → bridge.simulated (Tempo → Solana) → partner.payout (Solana → NGN)` |
+| **Mainnet** | `ledger.reserve → across.bridge (Tempo → Base) → across.bridge (Base → Solana) → partner.payout (Solana → NGN)` |
+
+On mainnet, Paj settles on Base, so a single Across hop (Tempo → Base) is sufficient. The two-hop path through Solana is used when the partner's settlement chain is Solana.
+
+<Warning>
+  The `pnpm payout:demo` fiat leg uses a Paj-shaped mock partner. To run a production payout that delivers real naira to a bank account, you need a Paj business API key set in `.env.local`. See [Partner Interface](/integrations/partner-interface) for the list of partner candidates.
+</Warning>
+
+<Tip>
+  To see what happens when the partner fails mid-payout, run the console action **Payout with partner failure**. The saga compensates in reverse order with a real on-chain Tempo refund. See [Failure and Compensation](/flows/failure-and-compensation) for the full walkthrough.
+</Tip>

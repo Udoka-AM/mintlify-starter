@@ -1,0 +1,106 @@
+---
+title: "Corridor's Double-Entry Ledger and Audit Trail"
+sidebarTitle: "Ledger"
+description: "How Corridor's append-only journal enforces balance, prevents overdrafts, and gives you a complete, tamper-proof record of every movement across every chain."
+---
+
+Every settlement Corridor executes — whether a naira payout, a shielded supplier batch, or a cross-chain bridge leg — is recorded in a single double-entry ledger before it is considered final. Chains and partners are evidence of what happened; the ledger is Corridor's authoritative statement, and reconciliation proves the two agree.
+
+## Account structure
+
+An account is identified by four coordinates: the **owner**, the **corridor** it belongs to, the **asset** it holds, and the **venue** where that asset lives. That four-part key means the same customer's EUR balances on Tempo and their NGN payable at a partner are distinct accounts, kept and queried independently.
+
+```text
+{type}:{ownerType}:{ownerId}:{corridor | *}:{asset}:{venue}
+
+liability:customer:adeola-imports:NGN-CNY:pathUSD:tempo
+asset:vault:treasury:*:pathUSD:tempo
+clearing:clearing:usd-peg:*:USDC:solana
+expense:expense:gas:*:pathUSD:tempo
+```
+
+Five account types cover every movement in the system:
+
+| Type | Natural balance | Purpose |
+|---|---|---|
+| `asset` | Debit | Vaults — real funds Corridor controls on a venue (Tempo treasury, Solana egress/ingress, Zcash vaults) |
+| `liability` | Credit | What Corridor owes customers: available balance and funds held for in-flight payouts |
+| `clearing` | Debit | Conversions between assets (pathUSD ↔ USDC, USD ↔ ZEC). Each clearing pair nets to zero over a complete flow |
+| `revenue` | Credit | Fees earned |
+| `expense` | Debit | Costs borne — network gas, Zcash transaction fees |
+
+Named helpers (`Accounts.customer`, `.customerHold`, `.vault`, `.clearing`, `.revenue`, `.expense`) open accounts on first use, so no part of the system ever builds account IDs by hand.
+
+## Invariants the ledger enforces
+
+<CardGroup cols={2}>
+  <Card title="Every entry balances per asset" icon="scale">
+    The sum of debits equals the sum of credits **for each asset** in every journal entry. An unbalanced entry is rejected before any write reaches the database.
+  </Card>
+  <Card title="No overdraft where it matters" icon="shield-check">
+    Vault and customer-balance accounts are flagged `no_overdraft`. After postings are applied, each such account's natural balance is checked inside the same transaction, which rolls back on violation. You cannot spend funds you do not have.
+  </Card>
+  <Card title="Exactly once per external movement" icon="fingerprint">
+    A unique constraint on `(external_venue, external_ref)` means any on-chain transaction hash, Solana signature, or partner order ID can be booked exactly once. A second attempt returns the original entry — it does not create a duplicate.
+  </Card>
+  <Card title="Append-only history" icon="lock">
+    Database triggers reject `UPDATE` and `DELETE` on the journal and postings tables. Mistakes are corrected with explicit reversing entries, so the audit trail is never rewritten.
+  </Card>
+</CardGroup>
+
+## How a multi-asset posting works
+
+A single ledger entry can span two assets — for example, releasing a customer hold in pathUSD while simultaneously crediting a USDC egress vault — as long as each asset balances independently:
+
+```ts
+await ledger.post({
+  kind: "partner.payout",
+  reference: d.reference,          // the Corridor Reference for this payout
+  sagaId: ctx.sagaId,
+  external: { venue: "partner_fiat", ref: `paj:${orderId}` },
+  lines: [
+    { account: hold,      direction: "D", money: money("pathUSD", 5_000_000n) },
+    { account: pegTempo,  direction: "C", money: money("pathUSD", 5_000_000n) },
+    { account: pegSolana, direction: "D", money: money("USDC",    5_000_000n) },
+    { account: egress,    direction: "C", money: money("USDC",    5_000_000n) },
+  ],
+});
+```
+
+The `usd-peg` clearing pair (pathUSD on one side, USDC on the other) nets to zero across the complete flow. The Treasury Console shows this happening live.
+
+## FX and swaps through clearing accounts
+
+Whenever value crosses an asset boundary — a DEX swap of USDC.e into pathUSD on ingress, or a NEAR Intents swap of USDC into ZEC for a shielded payout — Corridor routes both legs through a named clearing account such as `clearing:USD-ZEC`. The clearing account absorbs any timing difference between the debit and the credit, and its balance returning to zero is proof that the conversion balanced.
+
+## Vault accounting: on-chain vs. ledger
+
+For each treasury vault, Corridor reconciles the on-chain balance against what the ledger says the vault holds. To keep the comparison meaningful, two categories of movement that the saga legs do not book directly are picked up automatically from the chain:
+
+<CardGroup cols={2}>
+  <Card title="Gas" icon="fuel">
+    Tempo charges each fee as a TIP-20 transfer from the payer to the Fee Manager (`0xfeec…0000`). Every fee paid by a vault is booked to `expense:gas`, keyed by the specific log event, so it is booked exactly once regardless of how many times the observer runs.
+  </Card>
+  <Card title="Funding deposits" icon="banknote">
+    Deposits into a vault from an approved funding source — the testnet faucet (mints from the zero address) or owner wallets listed in `CORRIDOR_FUNDING_SOURCES` on mainnet — are booked to `equity:owner`. Any deposit without a recognised reference stays `unreferenced` and is never credited automatically.
+  </Card>
+</CardGroup>
+
+On Moderato testnet, this produces a perfect match:
+
+| Treasury vault | Value |
+|---|---|
+| On-chain balance | 1,000,051.994555 pathUSD |
+| Ledger balance | 1,000,051.994555 pathUSD |
+| Difference | **0.000000 pathUSD** |
+| Gas booked | 10 transactions, 0.005445 pathUSD |
+
+## What this means for you
+
+- **Automatic reconciliation.** Because every on-chain movement and every partner event is booked to the same ledger, reconciliation is not a periodic spreadsheet exercise — it runs continuously and surfaces exceptions immediately.
+- **Complete audit trail.** Every entry, every reversal, and every correction is permanently visible with its saga ID, Corridor Reference, and external identifier. Nothing is deleted.
+- **No double-booking.** The unique constraint on external references means a retried webhook, a replayed observer, or a restarted saga worker cannot create a duplicate booking.
+
+<Note>
+Amounts are stored as `numeric(78,0)` integer minor units — wide enough for any 256-bit on-chain value. Balance rows are locked in a stable order before posting, so concurrent writers cannot deadlock.
+</Note>

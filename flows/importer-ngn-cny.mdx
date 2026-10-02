@@ -1,0 +1,115 @@
+---
+title: "NGN to CNY: Nigerian Importer Pays a Supplier"
+sidebarTitle: "NGN → CNY"
+description: "A Nigerian importer pays ₦1,560,000 into the Corridor hub, receives 1,000 USDC in pathUSD, then pays ¥7,140 to a supplier in Shenzhen — two sagas, one balance."
+---
+
+A Lagos importer owes a supplier in Shenzhen. Rather than locking up a USD account abroad or waiting on correspondent banks, the importer pays naira into a one-off virtual bank account, sees the equivalent credited to their Corridor hub balance as pathUSD, and then instructs a payout to the supplier in CNY. Two independent sagas — a collection and a payout — share a single Tempo hub balance between them. This page walks through the flow exactly as it ran on testnet on 29 September 2026: **₦1,560,000 → 1,000 USDC → ¥7,140 to Shenzhen Brightline Electronics Co., 4/4 matched**.
+
+## Run the demo
+
+```bash
+pnpm importer:demo
+```
+
+## Why N integrations, not N×N
+
+Corridor is a hub-and-spoke network. Every collection lands pathUSD on Tempo; every payout leaves from there. Adding a new currency pair means adding one partner on one spoke — not wiring every source currency to every destination currency individually.
+
+The NGN→CNY flow uses exactly the same Tempo hub as the EUR→NGN payout on the previous page. The collection spoke (NGN in) and the payout spoke (CNY out) are independent integrations. A single Corridor customer can collect from dozens of source currencies and pay into dozens of destination currencies — all settled through one balance.
+
+## The two-phase structure
+
+```
+₦1,560,000 (Lagos bank)
+      │
+      ▼
+[Phase 1 — Collection]
+partner.collect ──▶ Paj virtual bank account created
+NGN received    ──▶ 1,000 USDC delivered to Corridor ingress wallet
+across.bridge   ──▶ USDC bridges into the Tempo hub
+ledger.credit   ──▶ importer's pathUSD balance credited 1,000 pathUSD
+      │
+      ▼
+[Phase 2 — Payout]
+ledger.reserve  ──▶ 1,000 pathUSD moved to hold
+tempo.transfer  ──▶ pathUSD leaves hub with Corridor Reference in memo
+across.bridge   ──▶ Tempo → Base → Solana
+partner.payout  ──▶ USDC sent to Paj; Paj pays ¥7,140 to supplier
+recon           ──▶ 4/4 matched
+```
+
+## Phase 1 — Collection: naira into the hub
+
+<Steps>
+  <Step title="partner.collect — create the virtual bank account">
+    The saga calls `openCollection` on the Paj adapter, which returns a **one-off Nigerian virtual bank account**. The importer pays ₦1,560,000 from their banking app into that account. Paj converts at the locked NGN/USD rate (₦1,560 per USDC) and delivers 1,000 USDC to Corridor's ingress wallet.
+
+    A signed HMAC-SHA256 webhook from Paj confirms the NGN receipt and USDC delivery.
+  </Step>
+  <Step title="across.bridge — USDC bridges into the Tempo hub">
+    The ingress USDC crosses from Solana into the Tempo hub. On mainnet this is two Across hops (Solana → Base → Tempo); on the testnet recording it uses the `simulated` adapter with the same interface.
+
+    **Live Tempo explorer (testnet):** [0x100fde2c…](https://explore.testnet.tempo.xyz/tx/0x100fde2c5d68f4eeb38e1fb4993abae78960023c1a3ab3f6a2b96289901961b0)
+  </Step>
+  <Step title="ledger.credit — credit the importer's hub balance">
+    The reconciliation engine matches the bridge fill event against the collection's Corridor Reference and the ledger credits 1,000 pathUSD to the importer's available balance. The collection saga closes as `completed`.
+  </Step>
+</Steps>
+
+## Phase 2 — Payout: yuan to the supplier
+
+<Steps>
+  <Step title="ledger.reserve — hold pathUSD">
+    1,000 pathUSD moves from the importer's available balance to their hold account. This is the same reserve step as the EUR→NGN payout — the engine is identical regardless of direction.
+  </Step>
+  <Step title="tempo.transfer — pathUSD leaves the hub">
+    pathUSD transfers from the treasury vault to the escrow address, with the payout's Corridor Reference (`0x0201284600…53957c1f`) in the `transferWithMemo` memo field.
+
+    **Live Tempo explorer (testnet):** [0x671161f6…](https://explore.testnet.tempo.xyz/tx/0x671161f61c70a0b5b33c6c8de4221c938d86c310958725146ea9f21517957b5e)
+  </Step>
+  <Step title="across.bridge (Tempo → Base → Solana) — two-hop bridge">
+    The same two Across hops as the EUR→NGN payout carry USDC from the Tempo hub to Solana: first Tempo → Base (~1 s fill, ~$0.004 fee), then Base → Solana (~8 s fill, ~$0.0006 fee). Each hop runs as a separate saga leg with its own compensation.
+  </Step>
+  <Step title="partner.payout — fund Paj, pay the supplier">
+    Paj receives the USDC on Solana with `corridor:<ref>` in the SPL Memo instruction, and pays **¥7,140** (at 7.14 CNY/USD) to **Shenzhen Brightline Electronics Co.** A signed webhook confirms delivery.
+
+    <Note>
+      Onshore CNY conversion is restricted for cross-border trade. In practice, China trade settles in USD, HKD or USDT to a Hong Kong or offshore account. The payout spoke routes through whichever licensed partner covers that rail — the hub and the saga engine are unchanged. Nium (USDC-funded payouts to 100+ countries) and licensed Hong Kong payment institutions are the primary candidates.
+    </Note>
+  </Step>
+  <Step title="recon — 4/4 matched">
+    The Tempo observer, the Solana memo observer, and the partner webhook each emit an `Observation`. The matcher joins all four on the Corridor Reference.
+
+    **Demo result: 4/4 matched.**
+  </Step>
+</Steps>
+
+## Corridor Reference decoded
+
+The payout reference on this flow encodes: kind `payout`, corridor **NGN → CNY**, lane `public`, with a 16-byte UUIDv7 payment ID and a 7-byte keyed customer tag. See [Corridor Reference](/concepts/corridor-reference) for a full decode of the actual bytes.
+
+## Why this matters for the importer
+
+<CardGroup cols={2}>
+  <Card title="No foreign dollar account" icon="landmark">
+    The importer's balance sits on the Tempo hub in pathUSD. They never need to open or pre-fund a USD account abroad.
+  </Card>
+  <Card title="Decouple collect and pay" icon="arrows-split-up-and-left">
+    The two sagas are independent. Collect naira when liquidity is available; pay the supplier when the invoice is due. Pay multiple suppliers from one collection.
+  </Card>
+  <Card title="Compliance references travel with the payment" icon="file-contract">
+    Form M numbers, invoice references and customer tags ride in the saga data and the reconciliation trail, giving the licensed customer a complete audit record.
+  </Card>
+  <Card title="Privacy option available" icon="shield-halved">
+    The importer can pass `privacy: "shielded"` to keep supplier names and amounts off public chains. The same hub balance funds a private Zcash Ironwood batch instead of a public payout.
+  </Card>
+</CardGroup>
+
+## Shielded variant
+
+If the importer does not want competitors reading supplier prices or volumes on a public chain, the payout leg can take the shielded lane instead. The only change is `privacy: "shielded"` in the payout intent — the planner routes the payout through NEAR Intents (USDC → ZEC) and into a Zcash Ironwood batch, approved by FROST 2-of-3.
+
+<Tip>
+  See [Shielded Supplier Batch](/flows/shielded-supplier-batch) for the full walkthrough of a private multi-supplier payment, including the FROST threshold approval and auditor viewing-key disclosure.
+</Tip>

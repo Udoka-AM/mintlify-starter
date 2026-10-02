@@ -1,0 +1,137 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "luma",
+  "name": "Corridor",
+  "description": "Stablecoin settlement and treasury rails for payment companies moving money into and out of Africa.",
+  "colors": {
+    "primary": "#040404",
+    "light": "#7c7c7c",
+    "dark": "#d6d6d6"
+  },
+  "logo": {
+    "light": "https://media.brand.dev/cda86334-73c1-42a0-8f9b-51fb4cfee99c.svg",
+    "dark": "https://media.brand.dev/cda86334-73c1-42a0-8f9b-51fb4cfee99c.svg"
+  },
+  "favicon": "https://media.brand.dev/9474b23c-38b4-4714-aa83-66c18cf7cce0.svg",
+  "navbar": {
+    "links": [
+      {
+        "label": "Live Console",
+        "href": "https://udoka-am.github.io/corridor/console/"
+      }
+    ],
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/Udoka-AM/corridor"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "what-corridor-is",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "The Opportunity",
+            "pages": [
+              "market/the-problem",
+              "market/stablecoin-flows",
+              "market/business-model"
+            ]
+          },
+          {
+            "group": "Product Status",
+            "pages": [
+              "status/evidence",
+              "status/roadmap"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "How It Works",
+        "groups": [
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/hub-and-spoke",
+              "concepts/corridor-reference",
+              "concepts/settlement-assets"
+            ]
+          },
+          {
+            "group": "Engines",
+            "pages": [
+              "concepts/ledger",
+              "concepts/routing",
+              "concepts/saga",
+              "concepts/reconciliation"
+            ]
+          },
+          {
+            "group": "Treasury Console",
+            "pages": [
+              "concepts/treasury-console",
+              "concepts/security"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Integrations",
+        "groups": [
+          {
+            "group": "Settlement & Bridging",
+            "pages": [
+              "integrations/tempo",
+              "integrations/across",
+              "integrations/base"
+            ]
+          },
+          {
+            "group": "Liquidity & Payouts",
+            "pages": [
+              "integrations/solana",
+              "integrations/paj",
+              "integrations/partner-interface"
+            ]
+          },
+          {
+            "group": "Shielded Lane",
+            "pages": [
+              "integrations/zcash",
+              "integrations/frost",
+              "integrations/near-intents"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Payment Flows",
+        "groups": [
+          {
+            "group": "End-to-End Guides",
+            "pages": [
+              "flows/payout-eur-ngn",
+              "flows/importer-ngn-cny",
+              "flows/shielded-supplier-batch",
+              "flows/failure-and-compensation"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Udoka-AM/corridor"
+    }
+  }
+}
